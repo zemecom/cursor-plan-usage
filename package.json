@@ -1,0 +1,53 @@
+{
+  "name": "cursor-plan-usage",
+  "displayName": "Cursor Plan Usage",
+  "description": "Статусбар и дашборд тарифа Cursor: Grok и Other.",
+  "version": "0.2.8",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cursorPlanUsage.openDashboard",
+        "title": "Cursor Plan Usage: открыть дашборд"
+      },
+      {
+        "command": "cursorPlanUsage.refresh",
+        "title": "Cursor Plan Usage: обновить"
+      },
+      {
+        "command": "cursorPlanUsage.openSettings",
+        "title": "Cursor Plan Usage: открыть настройки"
+      }
+    ],
+    "configuration": {
+      "title": "Cursor Plan Usage",
+      "properties": {
+        "cursorPlanUsage.pollIntervalMinutes": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Как часто автоматически обновлять тариф и проценты в статусбаре, в минутах. Пока дашборд открыт, он обновляется с тем же интервалом."
+        },
+        "cursorPlanUsage.dashboardDefaultRange": {
+          "type": "string",
+          "default": "billingCycle",
+          "enum": ["billingCycle", "30d", "7d", "1d"],
+          "enumDescriptions": [
+            "Текущий биллинг-цикл",
+            "Последние 30 дней",
+            "Последние 7 дней",
+            "Последние 24 часа"
+          ],
+          "description": "Период, который дашборд открывает по умолчанию. Проценты тарифа в карточках всегда за текущий цикл."
+        }
+      }
+    }
+  }
+}
