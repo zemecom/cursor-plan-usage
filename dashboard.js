@@ -115,10 +115,24 @@ function dashboardHtml(webview, nonce) {
       row.append(cell);
       return row;
     }
+    let shown = null;
+    function frameFrom(payload) {
+      return {
+        snapshot: payload.snapshot || null,
+        days: payload.days || [],
+        models: payload.models || [],
+        events: payload.events || [],
+        eventCount: payload.eventCount || 0,
+        truncated: Boolean(payload.truncated),
+        updatedAt: payload.updatedAt || null,
+      };
+    }
     function render(payload) {
+      const hold = Boolean(shown) && (payload.loadingEvents || payload.error);
+      const frame = hold ? shown : frameFrom(payload);
+      const snapshot = payload.snapshot || (hold && shown.snapshot) || {};
       banner.classList.toggle("show", Boolean(payload.error));
       banner.textContent = payload.error || "";
-      const snapshot = payload.snapshot || {};
       const price = snapshot.price ? " (" + snapshot.price + ")" : "";
       cards.replaceChildren(
         card("Тариф", (snapshot.planName || "—") + price),
@@ -128,7 +142,7 @@ function dashboardHtml(webview, nonce) {
       document.querySelectorAll("#range button").forEach((button) => {
         button.classList.toggle("active", button.dataset.range === payload.range);
       });
-      const dayRows = payload.days || [];
+      const dayRows = frame.days;
       const maxTokens = dayRows.reduce((max, day) => Math.max(max, day.tokens), 0) || 1;
       bars.replaceChildren(...(dayRows.length ? dayRows.map((day) => {
         const column = el("div", null, "bar");
@@ -138,26 +152,32 @@ function dashboardHtml(webview, nonce) {
         column.append(fill, el("span", String(day.day || "").slice(5)));
         return column;
       }) : [el("span", "За выбранный период событий нет", "muted")]));
-      const modelRows = payload.models || [];
+      const modelRows = frame.models;
       models.replaceChildren(...(modelRows.length ? modelRows.map((row) => {
         const tr = document.createElement("tr");
         tr.append(el("td", row.model), el("td", tokens(row.tokens), "num"), el("td", row.requests == null ? "—" : tokens(row.requests), "num"), el("td", dollars(row.spendCents), "num"));
         return tr;
       }) : [emptyRow(4, "Нет данных")]));
-      const eventRows = payload.events || [];
+      const eventRows = frame.events;
       events.replaceChildren(...(eventRows.length ? eventRows.map((row) => {
         const tr = document.createElement("tr");
         const model = row.maxMode ? row.model + " MAX" : row.model;
         tr.append(el("td", when(row.timestamp)), el("td", row.kind), el("td", model), el("td", tokens(row.totalTokens), "num"), el("td", tokens(row.requests), "num"), el("td", dollars(row.spendCents), "num"));
         return tr;
       }) : [emptyRow(6, "Нет событий")]));
-      const hidden = Math.max(0, (payload.eventCount || 0) - eventRows.length);
-      eventNote.textContent = payload.truncated
+      const hidden = Math.max(0, frame.eventCount - eventRows.length);
+      eventNote.textContent = frame.truncated
         ? "Показана только часть периода: событий слишком много."
-        : hidden > 0 ? "В таблице последние " + eventRows.length + ", всего " + payload.eventCount + "." : (payload.eventCount ? "Всего " + payload.eventCount : "");
+        : hidden > 0 ? "В таблице последние " + eventRows.length + ", всего " + frame.eventCount + "." : (frame.eventCount ? "Всего " + frame.eventCount : "");
+      const stamp = payload.loadingEvents ? null : (hold ? shown.updatedAt : payload.updatedAt);
       updated.textContent = payload.loadingEvents
         ? "Тариф на месте, события ещё считаются…"
-        : payload.updatedAt ? "Обновлено " + when(payload.updatedAt) : "Нет данных";
+        : stamp ? "Обновлено " + when(stamp) : "Нет данных";
+      if (!payload.loadingEvents && !payload.error) {
+        shown = frameFrom(payload);
+      } else if (shown && payload.snapshot) {
+        shown.snapshot = payload.snapshot;
+      }
     }
     document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
     document.getElementById("settings").addEventListener("click", () => vscode.postMessage({ type: "settings" }));

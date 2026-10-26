@@ -10,7 +10,7 @@ const SAFE_VERSION = "v10";
 const KEYCHAIN_SERVICE = "Cursor Safe Storage";
 const KEYCHAIN_ACCOUNT = "Cursor Key";
 
-let encryptionKey = null;
+let encryptionKeyPromise = null;
 
 function stateDbPath() {
   if (platform() === "darwin") {
@@ -62,29 +62,28 @@ function readStoredAuth() {
 }
 
 function macEncryptionKey() {
-  if (encryptionKey) {
-    return Promise.resolve(encryptionKey);
+  if (encryptionKeyPromise) {
+    return encryptionKeyPromise;
   }
-  return new Promise((resolve, reject) => {
+  encryptionKeyPromise = new Promise((resolve, reject) => {
     execFile(
       "/usr/bin/security",
       ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"],
       { timeout: 15000, maxBuffer: 64 * 1024 },
       (error, stdout) => {
-        if (error) {
-          reject(new Error("keychain"));
-          return;
-        }
-        const password = String(stdout).replace(/\n$/, "");
+        const password = error ? "" : String(stdout).replace(/\n$/, "");
         if (!password) {
           reject(new Error("keychain"));
           return;
         }
-        encryptionKey = pbkdf2Sync(password, "saltysalt", 1003, 16, "sha1");
-        resolve(encryptionKey);
+        resolve(pbkdf2Sync(password, "saltysalt", 1003, 16, "sha1"));
       }
     );
+  }).catch((error) => {
+    encryptionKeyPromise = null;
+    throw error;
   });
+  return encryptionKeyPromise;
 }
 
 async function unwrapStoredToken(stored) {

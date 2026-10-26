@@ -25,13 +25,28 @@ function sessionFromToken(token) {
   return { userId, cookie: `${userId}%3A%3A${token}` };
 }
 
-function requestJson(url, { method, headers, body, timeout = 20000 }) {
+function requestJson(url, { method, headers, body, timeout = 20000, signal }) {
+  if (signal && signal.aborted) {
+    return Promise.reject(new Error("timeout"));
+  }
   const target = new URL(url);
   const payload = body == null ? null : JSON.stringify(body);
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (settle, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      settle(value);
+    };
     const req = https.request(
       {
         hostname: target.hostname,
+        port: target.port || 443,
         path: `${target.pathname}${target.search}`,
         method,
         headers: {
@@ -46,23 +61,36 @@ function requestJson(url, { method, headers, body, timeout = 20000 }) {
         res.on("end", () => {
           const raw = Buffer.concat(chunks).toString("utf8");
           if (res.statusCode !== 200) {
-            reject(new Error(`http-${res.statusCode}`));
+            finish(reject, new Error(`http-${res.statusCode}`));
             return;
           }
           try {
-            resolve(JSON.parse(raw));
+            finish(resolve, JSON.parse(raw));
           } catch (parseError) {
-            reject(parseError);
+            finish(reject, parseError);
           }
         });
       }
     );
-    req.on("error", reject);
-    req.on("timeout", () => req.destroy(new Error("timeout")));
+    const onAbort = () => {
+      finish(reject, new Error("timeout"));
+      req.destroy();
+    };
+    if (signal) {
+      signal.addEventListener("abort", onAbort);
+    }
+    req.on("error", (error) => finish(reject, signal && signal.aborted ? new Error("timeout") : error));
+    req.on("timeout", () => {
+      finish(reject, new Error("timeout"));
+      req.destroy();
+    });
     if (payload) {
       req.write(payload);
     }
     req.end();
+    if (signal && signal.aborted) {
+      onAbort();
+    }
   });
 }
 
@@ -217,17 +245,12 @@ function rangeStart(range, snapshot, now) {
   return snapshot.billingCycleStartMs || now - 30 * 86400000;
 }
 
-function withDeadline(promise, ms) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout")), ms);
-    promise.then((value) => {
-      clearTimeout(timer);
-      resolve(value);
-    }, (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
+function runWithin(ms, start) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return Promise.resolve()
+    .then(() => start(controller.signal))
+    .finally(() => clearTimeout(timer));
 }
 
 function modelsFromAggregations(data) {
@@ -258,14 +281,21 @@ async function loadSnapshot() {
   return snapshotFrom(planInfo, period);
 }
 
-async function loadEvents(cookie, teamId, startMs, endMs) {
+async function loadEvents(cookie, teamId, startMs, endMs, signal) {
+  if (signal && signal.aborted) {
+    throw new Error("timeout");
+  }
   const events = [];
   let truncated = false;
   for (let page = 1; page <= EVENTS_MAX_PAGES; page += 1) {
+    if (signal && signal.aborted) {
+      throw new Error("timeout");
+    }
     const data = await requestJson(EVENTS_URL, {
       method: "POST",
       headers: cookieHeaders(cookie),
       timeout: 15000,
+      signal,
       body: {
         teamId: teamId || 0,
         startDate: String(startMs),
@@ -312,16 +342,16 @@ async function loadUsageDetails(range, snapshot) {
   let details = null;
   let eventsError = null;
   try {
-    const stripe = await withDeadline(requestJson(STRIPE_URL, {
+    const stripe = await runWithin(8000, (signal) => requestJson(STRIPE_URL, {
       method: "GET",
       headers: cookieHeaders(session.cookie),
       timeout: 8000,
-    }), 8000);
+      signal,
+    }));
     const now = Date.now();
-    const loaded = await withDeadline(
-      loadEvents(session.cookie, stripe && stripe.teamId, rangeStart(range, snapshot, now), now),
-      8000
-    );
+    const loaded = await runWithin(8000, (signal) => (
+      loadEvents(session.cookie, stripe && stripe.teamId, rangeStart(range, snapshot, now), now, signal)
+    ));
     details = dashboardFromEvents(snapshot, range, loaded, email, now);
   } catch (error) {
     eventsError = error instanceof Error ? error.message : "unknown";
