@@ -21,8 +21,13 @@ function dashboardHtml(webview, nonce) {
     h2 { font-size: 14px; margin: 0; }
     .muted { color: var(--vscode-descriptionForeground); font-size: 12px; }
     .actions { display: flex; gap: 8px; }
-    button, .range button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+    button, .range button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 4px; padding: 6px 10px; cursor: pointer; transition: transform 80ms ease, opacity 80ms ease; }
     button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+    button:active:not(:disabled), .range button:active { transform: scale(0.96); }
+    button.primary.busy { transform: scale(0.96); outline: 1px solid var(--vscode-focusBorder); background: var(--vscode-button-hoverBackground, var(--vscode-button-secondaryBackground)); }
+    button:disabled { cursor: progress; }
+    button.busy::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: refresh-spin 0.7s linear infinite; }
+    @keyframes refresh-spin { to { transform: rotate(360deg); } }
     .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 12px 0 20px; }
     .card { background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-widget-border, transparent); border-radius: 8px; padding: 12px; }
     .card .label { font-size: 12px; color: var(--vscode-descriptionForeground); }
@@ -92,6 +97,34 @@ function dashboardHtml(webview, nonce) {
     const banner = document.getElementById("banner");
     const updated = document.getElementById("updated");
     const eventNote = document.getElementById("event-note");
+    const refreshButton = document.getElementById("refresh");
+
+    let busyToken = 0;
+    let busySince = 0;
+    function applyBusy(on) {
+      refreshButton.classList.toggle("busy", on);
+      refreshButton.disabled = on;
+      refreshButton.setAttribute("aria-busy", on ? "true" : "false");
+      refreshButton.textContent = on ? "Обновление…" : "Обновить";
+    }
+    function setRefreshing(on) {
+      if (on) {
+        busyToken += 1;
+        if (!refreshButton.classList.contains("busy")) {
+          busySince = Date.now();
+        }
+        applyBusy(true);
+        return;
+      }
+      const token = busyToken;
+      const wait = Math.max(0, 700 - (Date.now() - busySince));
+      setTimeout(() => {
+        if (token !== busyToken) {
+          return;
+        }
+        applyBusy(false);
+      }, wait);
+    }
 
     function el(tag, text, className) {
       const node = document.createElement(tag);
@@ -178,8 +211,12 @@ function dashboardHtml(webview, nonce) {
       } else if (shown && payload.snapshot) {
         shown.snapshot = payload.snapshot;
       }
+      setRefreshing(Boolean(payload.loadingEvents));
     }
-    document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
+    refreshButton.addEventListener("click", () => {
+      setRefreshing(true);
+      vscode.postMessage({ type: "refresh" });
+    });
     document.getElementById("settings").addEventListener("click", () => vscode.postMessage({ type: "settings" }));
     document.getElementById("range").addEventListener("click", (event) => {
       const range = event.target && event.target.dataset && event.target.dataset.range;
@@ -191,6 +228,7 @@ function dashboardHtml(webview, nonce) {
         render(event.data);
       } catch (error) {
         updated.textContent = "Ошибка отрисовки: " + (error && error.message ? error.message : "unknown");
+        setRefreshing(false);
       }
     });
     vscode.postMessage({ type: "ready" });

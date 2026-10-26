@@ -118,10 +118,10 @@ function activate(context) {
   }
 
   function openSettings() {
-    return vscode.commands.executeCommand("workbench.action.openSettings", {
-      query: "cursorPlanUsage",
-      revealSetting: { key: "cursorPlanUsage.pollIntervalMinutes" },
-    });
+    return vscode.commands.executeCommand(
+      "workbench.action.openSettings",
+      "@id:cursorPlanUsage.pollIntervalMinutes,cursorPlanUsage.dashboardDefaultRange"
+    );
   }
 
   function openDashboard() {
