@@ -12,14 +12,14 @@
 
 ## Установка
 
-Нужен вошедший в Cursor аккаунт и `sqlite3` в `/usr/bin/sqlite3`. Расширение читает сессию только на чтение из локальной базы редактора и никуда её не записывает.
+Нужен вошедший в Cursor аккаунт и `sqlite3` в `/usr/bin/sqlite3`. Расширение читает сессию только на чтение из локальной базы редактора и никуда её не записывает. Если значение начинается с `cursor-safe-storage:v1:`, на macOS оно расшифровывается ключом из связки `Cursor Safe Storage` и только потом уходит в запрос тарифа.
 
 ```bash
 git clone https://github.com/zemecom/cursor-plan-usage.git
 ln -sfn "$(pwd)/cursor-plan-usage" "$HOME/.cursor/extensions/local.cursor-plan-usage"
 ```
 
-Имя каталога в `~/.cursor/extensions` без суффикса версии. После создания ссылки выполни **Developer: Restart Extension Host**. Кнопка **Restart Extensions** в списке расширений появляется, когда версия в `package.json` отличается от версии, которую хост уже загрузил.
+Имя каталога в `~/.cursor/extensions` без суффикса версии. После создания ссылки выполни **Developer: Restart Extension Host**.
 
 ## Настройки
 
@@ -40,12 +40,10 @@ ln -sfn "$(pwd)/cursor-plan-usage" "$HOME/.cursor/extensions/local.cursor-plan-u
 
 ## Разработка
 
-Зависимостей нет, сборки нет. Логика в трёх файлах: `extension.js` (статусбар и панель), `usage.js` (сессия и запросы), `dashboard.js` (разметка панели).
+Зависимостей нет, сборки нет. Логика в четырёх файлах: `extension.js` (статусбар и панель), `session.js` (чтение и расшифровка сессии), `usage.js` (запросы и сводка), `dashboard.js` (разметка панели).
 
 Проверка синтаксиса:
 
 ```bash
-node --check extension.js && node --check usage.js && node --check dashboard.js
+node --check extension.js && node --check session.js && node --check usage.js && node --check dashboard.js
 ```
-
-Правка этих файлов не подхватывается уже запущенным хостом. Подними версию в `package.json` и перезапусти хост расширений.

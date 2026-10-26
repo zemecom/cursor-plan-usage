@@ -1,9 +1,7 @@
 "use strict";
 
-const { execFile } = require("child_process");
 const https = require("https");
-const { homedir, platform } = require("os");
-const { join } = require("path");
+const { readAuth } = require("./session");
 
 const PLAN_INFO_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo";
 const PERIOD_USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
@@ -13,55 +11,6 @@ const EVENTS_URL = "https://cursor.com/api/dashboard/get-filtered-usage-events";
 const EVENTS_PAGE_SIZE = 200;
 const EVENTS_MAX_PAGES = 8;
 const TABLE_EVENT_LIMIT = 200;
-
-function stateDbPath() {
-  if (platform() === "darwin") {
-    return join(homedir(), "Library/Application Support/Cursor/User/globalStorage/state.vscdb");
-  }
-  if (platform() === "win32") {
-    const appData = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
-    return join(appData, "Cursor/User/globalStorage/state.vscdb");
-  }
-  return join(homedir(), ".config/Cursor/User/globalStorage/state.vscdb");
-}
-
-function sqliteUri(dbPath) {
-  const encoded = dbPath.split("/").map((part, index) => (index === 0 ? part : encodeURIComponent(part))).join("/");
-  return `file:${encoded}?mode=ro`;
-}
-
-function readAuth() {
-  const uri = sqliteUri(stateDbPath());
-  const sql = "SELECT key, value FROM ItemTable WHERE key IN ('cursorAuth/accessToken','cursorAuth/cachedEmail')";
-  return new Promise((resolve, reject) => {
-    execFile("/usr/bin/sqlite3", ["-json", uri, sql], { timeout: 5000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      let rows;
-      try {
-        rows = JSON.parse(stdout || "[]");
-      } catch (parseError) {
-        reject(parseError);
-        return;
-      }
-      const values = {};
-      for (const row of rows) {
-        if (row && typeof row.key === "string") {
-          values[row.key] = row.value;
-        }
-      }
-      const token = values["cursorAuth/accessToken"];
-      if (typeof token !== "string" || token.length < 20) {
-        reject(new Error("no-session"));
-        return;
-      }
-      const email = typeof values["cursorAuth/cachedEmail"] === "string" ? values["cursorAuth/cachedEmail"] : null;
-      resolve({ token, email });
-    });
-  });
-}
 
 function sessionFromToken(token) {
   const part = token.split(".")[1];
