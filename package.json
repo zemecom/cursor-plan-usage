@@ -2,7 +2,7 @@
   "name": "cursor-plan-usage",
   "displayName": "Cursor Plan Usage",
   "description": "Статусбар и дашборд тарифа Cursor: Grok и Other.",
-  "version": "0.2.14",
+  "version": "0.2.18",
   "publisher": "local",
   "engines": {
     "vscode": "^1.85.0"

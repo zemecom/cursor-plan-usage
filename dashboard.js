@@ -30,7 +30,8 @@ function dashboardHtml(webview, nonce) {
     @keyframes refresh-spin { to { transform: rotate(360deg); } }
     .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 12px 0 20px; }
     .card { background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-widget-border, transparent); border-radius: 8px; padding: 12px; }
-    .card .label { font-size: 12px; color: var(--vscode-descriptionForeground); }
+    .card .label { display: flex; align-items: center; min-height: 16px; font-size: 12px; color: var(--vscode-descriptionForeground); }
+    .mark { width: 16px; height: 16px; display: block; fill: currentColor; }
     .card .value { font-size: 22px; margin-top: 4px; }
     section { margin-top: 22px; }
     .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 12px; }
@@ -138,8 +139,22 @@ function dashboardHtml(webview, nonce) {
     function when(value) { return value ? new Date(value).toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" }) : "—"; }
     function card(label, value) {
       const box = el("div", null, "card");
-      box.append(el("div", label, "label"), el("div", value, "value"));
+      const caption = el("div", null, "label");
+      if (typeof label === "string") caption.textContent = label;
+      else caption.append(label);
+      box.append(caption, el("div", value, "value"));
       return box;
+    }
+    function grokMark() {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("class", "mark");
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", "Grok");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", "M6.469 8.776L16.512 23h-4.464L2.005 8.776H6.47zm-.004 7.9l2.233 3.164L6.467 23H2l4.465-6.324zM22 2.582V23h-3.659V7.764L22 2.582zM22 1l-9.952 14.095-2.233-3.163L17.533 1H22z");
+      svg.append(path);
+      return svg;
     }
     function emptyRow(columns, text) {
       const row = document.createElement("tr");
@@ -167,11 +182,18 @@ function dashboardHtml(webview, nonce) {
       banner.classList.toggle("show", Boolean(payload.error));
       banner.textContent = payload.error || "";
       const price = snapshot.price ? " (" + snapshot.price + ")" : "";
-      cards.replaceChildren(
+      const summary = [
         card("Тариф", (snapshot.planName || "—") + price),
-        card("Grok", percent(snapshot.autoPercentUsed)),
-        card("Other", percent(snapshot.apiPercentUsed))
-      );
+        card(grokMark(), percent(snapshot.autoPercentUsed)),
+        card("Other", percent(snapshot.apiPercentUsed)),
+      ];
+      if (snapshot.onDemand) {
+        const demand = snapshot.onDemand.percent == null
+          ? dollars(snapshot.onDemand.usedCents)
+          : percent(snapshot.onDemand.percent);
+        summary.push(card("OD", demand));
+      }
+      cards.replaceChildren(...summary);
       document.querySelectorAll("#range button").forEach((button) => {
         button.classList.toggle("active", button.dataset.range === payload.range);
       });

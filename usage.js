@@ -136,6 +136,24 @@ function formatReset(epochMs) {
   return new Date(epochMs).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" });
 }
 
+function onDemandFrom(spend) {
+  if (!spend || typeof spend !== "object") {
+    return null;
+  }
+  const buckets = [
+    [asNumber(spend.individualUsed), asNumber(spend.individualLimit)],
+    [asNumber(spend.pooledUsed), asNumber(spend.pooledLimit)],
+    [asNumber(spend.overallUsed), asNumber(spend.overallLimit)],
+  ];
+  const active = buckets.find(([used]) => used > 0);
+  if (!active) {
+    return null;
+  }
+  const [usedCents, limitCents] = active;
+  const percent = limitCents > 0 ? Math.min((usedCents / limitCents) * 100, 100) : null;
+  return { usedCents, limitCents, percent };
+}
+
 function snapshotFrom(planInfoResponse, periodResponse) {
   const planInfo = planInfoResponse && planInfoResponse.planInfo ? planInfoResponse.planInfo : {};
   const planUsage = periodResponse && periodResponse.planUsage ? periodResponse.planUsage : {};
@@ -151,13 +169,21 @@ function snapshotFrom(planInfoResponse, periodResponse) {
     includedSpendCents: asNumber(planUsage.includedSpend),
     bonusSpendCents: asNumber(planUsage.bonusSpend),
     limitCents: asNumber(planUsage.limit),
+    onDemand: onDemandFrom(periodResponse && periodResponse.spendLimitUsage),
     billingCycleStartMs: cycleStart,
     billingCycleEndMs: cycleEnd,
   };
 }
 
 function statusText(snapshot) {
-  return `${snapshot.planName} | Grok ${formatPercent(snapshot.autoPercentUsed)} | Other ${formatPercent(snapshot.apiPercentUsed)}`;
+  const base = `${snapshot.planName} | Grok ${formatPercent(snapshot.autoPercentUsed)} | Other ${formatPercent(snapshot.apiPercentUsed)}`;
+  if (!snapshot.onDemand) {
+    return base;
+  }
+  const demand = snapshot.onDemand.percent === null
+    ? formatDollars(snapshot.onDemand.usedCents)
+    : formatPercent(snapshot.onDemand.percent);
+  return `${base} | OD ${demand}`;
 }
 
 function tooltipMarkdown(snapshot) {
@@ -166,6 +192,9 @@ function tooltipMarkdown(snapshot) {
     `Тариф: ${snapshot.planName}${price}`,
     `Grok: ${formatPercent(snapshot.autoPercentUsed)}`,
     `Other: ${formatPercent(snapshot.apiPercentUsed)}`,
+    ...(snapshot.onDemand ? [
+      `OD: ${formatDollars(snapshot.onDemand.usedCents)} из ${formatDollars(snapshot.onDemand.limitCents)} (${formatPercent(snapshot.onDemand.percent)})`,
+    ] : []),
     `Потрачено: ${formatDollars(snapshot.totalSpendCents)} (включено ${formatDollars(snapshot.includedSpendCents)}, бонус ${formatDollars(snapshot.bonusSpendCents)}, лимит ${formatDollars(snapshot.limitCents)})`,
     `Цикл до: ${formatReset(snapshot.billingCycleEndMs)}`,
     "",
