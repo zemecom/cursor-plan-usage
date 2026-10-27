@@ -11,6 +11,12 @@ const KEYCHAIN_SERVICE = "Cursor Safe Storage";
 const KEYCHAIN_ACCOUNT = "Cursor Key";
 
 let encryptionKeyPromise = null;
+let keychainDenied = false;
+
+function allowKeychainPrompt() {
+  keychainDenied = false;
+  encryptionKeyPromise = null;
+}
 
 function stateDbPath() {
   if (platform() === "darwin") {
@@ -34,14 +40,14 @@ function readStoredAuth() {
   return new Promise((resolve, reject) => {
     execFile("/usr/bin/sqlite3", ["-json", uri, sql], { timeout: 5000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
       if (error) {
-        reject(error);
+        reject(new Error("sqlite"));
         return;
       }
       let rows;
       try {
         rows = JSON.parse(stdout || "[]");
       } catch (parseError) {
-        reject(parseError);
+        reject(new Error("sqlite"));
         return;
       }
       const values = {};
@@ -62,6 +68,9 @@ function readStoredAuth() {
 }
 
 function macEncryptionKey() {
+  if (keychainDenied) {
+    return Promise.reject(new Error("keychain"));
+  }
   if (encryptionKeyPromise) {
     return encryptionKeyPromise;
   }
@@ -81,7 +90,8 @@ function macEncryptionKey() {
     );
   }).catch((error) => {
     encryptionKeyPromise = null;
-    throw error;
+    keychainDenied = true;
+    throw error instanceof Error && error.message === "keychain" ? error : new Error("keychain");
   });
   return encryptionKeyPromise;
 }
@@ -117,4 +127,4 @@ function readAuth() {
   });
 }
 
-module.exports = { readAuth };
+module.exports = { allowKeychainPrompt, readAuth };

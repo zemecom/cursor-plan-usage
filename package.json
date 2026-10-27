@@ -1,9 +1,15 @@
 {
   "name": "cursor-plan-usage",
   "displayName": "Cursor Plan Usage",
-  "description": "Статусбар и дашборд тарифа Cursor: Grok и Other.",
-  "version": "0.2.18",
-  "publisher": "local",
+  "description": "Статусбар и дашборд тарифа Cursor: Grok, Other и OD.",
+  "version": "0.2.24",
+  "publisher": "zemecom",
+  "author": "zemecom",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zemecom/cursor-plan-usage.git"
+  },
+  "extensionKind": ["ui"],
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -11,6 +17,15 @@
   "activationEvents": ["onStartupFinished"],
   "main": "./extension.js",
   "contributes": {
+    "icons": {
+      "plan-grok": {
+        "description": "Grok",
+        "default": {
+          "fontPath": "media/grok.ttf",
+          "fontCharacter": "\\E001"
+        }
+      }
+    },
     "commands": [
       {
         "command": "cursorPlanUsage.openDashboard",

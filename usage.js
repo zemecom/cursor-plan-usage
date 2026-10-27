@@ -2,6 +2,14 @@
 
 const https = require("https");
 const { readAuth } = require("./session");
+const {
+  dashboardFromEvents,
+  modelsFromAggregations,
+  normalizeEvent,
+  publicCode,
+  rangeStart,
+  snapshotFrom,
+} = require("./usage-model");
 
 const PLAN_INFO_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo";
 const PERIOD_USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
@@ -10,14 +18,21 @@ const STRIPE_URL = "https://cursor.com/api/auth/stripe";
 const EVENTS_URL = "https://cursor.com/api/dashboard/get-filtered-usage-events";
 const EVENTS_PAGE_SIZE = 200;
 const EVENTS_MAX_PAGES = 8;
-const TABLE_EVENT_LIMIT = 200;
 
 function sessionFromToken(token) {
   const part = token.split(".")[1];
   if (!part) {
     throw new Error("bad-session");
   }
-  const payload = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+  } catch (error) {
+    throw new Error("bad-session");
+  }
+  if (!payload || typeof payload !== "object") {
+    throw new Error("bad-session");
+  }
   const userId = String(payload.sub || "").split("|").pop();
   if (!userId) {
     throw new Error("bad-session");
@@ -67,7 +82,7 @@ function requestJson(url, { method, headers, body, timeout = 20000, signal }) {
           try {
             finish(resolve, JSON.parse(raw));
           } catch (parseError) {
-            finish(reject, parseError);
+            finish(reject, new Error("bad-response"));
           }
         });
       }
@@ -79,7 +94,7 @@ function requestJson(url, { method, headers, body, timeout = 20000, signal }) {
     if (signal) {
       signal.addEventListener("abort", onAbort);
     }
-    req.on("error", (error) => finish(reject, signal && signal.aborted ? new Error("timeout") : error));
+    req.on("error", () => finish(reject, new Error(signal && signal.aborted ? "timeout" : "network")));
     req.on("timeout", () => {
       finish(reject, new Error("timeout"));
       req.destroy();
@@ -113,167 +128,6 @@ function cookieHeaders(cookie) {
   };
 }
 
-function asNumber(value) {
-  const number = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function formatPercent(value) {
-  return value === null ? "—" : `${value.toFixed(1)}%`;
-}
-
-function formatDollars(cents) {
-  if (cents === null) {
-    return "—";
-  }
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
-function formatReset(epochMs) {
-  if (epochMs === null) {
-    return "—";
-  }
-  return new Date(epochMs).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" });
-}
-
-function onDemandFrom(spend) {
-  if (!spend || typeof spend !== "object") {
-    return null;
-  }
-  const buckets = [
-    [asNumber(spend.individualUsed), asNumber(spend.individualLimit)],
-    [asNumber(spend.pooledUsed), asNumber(spend.pooledLimit)],
-    [asNumber(spend.overallUsed), asNumber(spend.overallLimit)],
-  ];
-  const active = buckets.find(([used]) => used > 0);
-  if (!active) {
-    return null;
-  }
-  const [usedCents, limitCents] = active;
-  const percent = limitCents > 0 ? Math.min((usedCents / limitCents) * 100, 100) : null;
-  return { usedCents, limitCents, percent };
-}
-
-function snapshotFrom(planInfoResponse, periodResponse) {
-  const planInfo = planInfoResponse && planInfoResponse.planInfo ? planInfoResponse.planInfo : {};
-  const planUsage = periodResponse && periodResponse.planUsage ? periodResponse.planUsage : {};
-  const cycleEnd = asNumber(periodResponse && periodResponse.billingCycleEnd) ?? asNumber(planInfo.billingCycleEnd);
-  const cycleStart = asNumber(periodResponse && periodResponse.billingCycleStart);
-  return {
-    planName: typeof planInfo.planName === "string" && planInfo.planName.trim() !== "" ? planInfo.planName.trim() : "Plan",
-    price: typeof planInfo.price === "string" ? planInfo.price : null,
-    totalPercentUsed: asNumber(planUsage.totalPercentUsed),
-    autoPercentUsed: asNumber(planUsage.autoPercentUsed),
-    apiPercentUsed: asNumber(planUsage.apiPercentUsed),
-    totalSpendCents: asNumber(planUsage.totalSpend),
-    includedSpendCents: asNumber(planUsage.includedSpend),
-    bonusSpendCents: asNumber(planUsage.bonusSpend),
-    limitCents: asNumber(planUsage.limit),
-    onDemand: onDemandFrom(periodResponse && periodResponse.spendLimitUsage),
-    billingCycleStartMs: cycleStart,
-    billingCycleEndMs: cycleEnd,
-  };
-}
-
-function statusText(snapshot) {
-  const base = `${snapshot.planName} | Grok ${formatPercent(snapshot.autoPercentUsed)} | Other ${formatPercent(snapshot.apiPercentUsed)}`;
-  if (!snapshot.onDemand) {
-    return base;
-  }
-  const demand = snapshot.onDemand.percent === null
-    ? formatDollars(snapshot.onDemand.usedCents)
-    : formatPercent(snapshot.onDemand.percent);
-  return `${base} | OD ${demand}`;
-}
-
-function tooltipMarkdown(snapshot) {
-  const price = snapshot.price ? ` (${snapshot.price})` : "";
-  return [
-    `Тариф: ${snapshot.planName}${price}`,
-    `Grok: ${formatPercent(snapshot.autoPercentUsed)}`,
-    `Other: ${formatPercent(snapshot.apiPercentUsed)}`,
-    ...(snapshot.onDemand ? [
-      `OD: ${formatDollars(snapshot.onDemand.usedCents)} из ${formatDollars(snapshot.onDemand.limitCents)} (${formatPercent(snapshot.onDemand.percent)})`,
-    ] : []),
-    `Потрачено: ${formatDollars(snapshot.totalSpendCents)} (включено ${formatDollars(snapshot.includedSpendCents)}, бонус ${formatDollars(snapshot.bonusSpendCents)}, лимит ${formatDollars(snapshot.limitCents)})`,
-    `Цикл до: ${formatReset(snapshot.billingCycleEndMs)}`,
-    "",
-    "Клик открывает дашборд.",
-  ].join("\n");
-}
-
-function mapKind(kind) {
-  if (kind === "USAGE_EVENT_KIND_USAGE_BASED") return "On-demand";
-  if (kind === "USAGE_EVENT_KIND_ERRORED_NOT_CHARGED") return "Ошибка";
-  if (kind === "USAGE_EVENT_KIND_ABORTED_NOT_CHARGED") return "Отмена";
-  return "Включено";
-}
-
-function normalizeEvent(raw) {
-  const source = raw && typeof raw === "object" ? raw : {};
-  const tokens = source.tokenUsage && typeof source.tokenUsage === "object" ? source.tokenUsage : {};
-  const totalTokens = ["inputTokens", "outputTokens", "cacheWriteTokens", "cacheReadTokens"]
-    .reduce((sum, key) => sum + (asNumber(tokens[key]) || 0), 0);
-  return {
-    timestamp: asNumber(source.timestamp) || 0,
-    model: typeof source.model === "string" && source.model ? source.model : "unknown",
-    kind: mapKind(typeof source.kind === "string" ? source.kind : ""),
-    totalTokens,
-    requests: asNumber(source.requestsCosts) ?? asNumber(source.numRequests) ?? 1,
-    spendCents: asNumber(source.chargedCents) ?? 0,
-    maxMode: Boolean(source.maxMode),
-    email: typeof source.userEmail === "string" ? source.userEmail : null,
-  };
-}
-
-function selectOwnEvents(events, email) {
-  const tagged = events.filter((event) => event.email);
-  if (tagged.length === 0) {
-    return events;
-  }
-  if (!email) {
-    return [];
-  }
-  const needle = email.toLowerCase();
-  return events.filter((event) => event.email && event.email.toLowerCase() === needle);
-}
-
-function dayKey(timestamp) {
-  const date = new Date(timestamp);
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-function aggregate(events) {
-  const days = new Map();
-  const models = new Map();
-  for (const event of events) {
-    const day = days.get(dayKey(event.timestamp)) || { day: dayKey(event.timestamp), tokens: 0, requests: 0, spendCents: 0 };
-    day.tokens += event.totalTokens;
-    day.requests += event.requests;
-    day.spendCents += event.spendCents;
-    days.set(day.day, day);
-
-    const model = models.get(event.model) || { model: event.model, tokens: 0, requests: 0, spendCents: 0 };
-    model.tokens += event.totalTokens;
-    model.requests += event.requests;
-    model.spendCents += event.spendCents;
-    models.set(event.model, model);
-  }
-  return {
-    days: [...days.values()].sort((left, right) => left.day.localeCompare(right.day)),
-    models: [...models.values()].sort((left, right) => right.tokens - left.tokens || right.spendCents - left.spendCents),
-  };
-}
-
-function rangeStart(range, snapshot, now) {
-  if (range === "1d") return now - 86400000;
-  if (range === "7d") return now - 7 * 86400000;
-  if (range === "30d") return now - 30 * 86400000;
-  return snapshot.billingCycleStartMs || now - 30 * 86400000;
-}
-
 function runWithin(ms, start) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
@@ -282,27 +136,13 @@ function runWithin(ms, start) {
     .finally(() => clearTimeout(timer));
 }
 
-function modelsFromAggregations(data) {
-  const rows = Array.isArray(data && data.aggregations) ? data.aggregations : [];
-  return rows.map((row) => {
-    const tokens = ["inputTokens", "outputTokens", "cacheWriteTokens", "cacheReadTokens"]
-      .reduce((sum, key) => sum + (asNumber(row[key]) || 0), 0);
-    return {
-      model: typeof row.modelIntent === "string" && row.modelIntent ? row.modelIntent : "unknown",
-      tokens,
-      requests: null,
-      spendCents: asNumber(row.totalCents) || 0,
-    };
-  }).sort((left, right) => right.spendCents - left.spendCents);
-}
-
-async function loadModelBreakdown() {
-  const { token } = await readAuth();
+async function loadModelBreakdown(auth) {
+  const token = (auth || await readAuth()).token;
   return modelsFromAggregations(await postBearer(AGGREGATED_URL, token));
 }
 
-async function loadSnapshot() {
-  const { token } = await readAuth();
+async function loadSnapshot(auth) {
+  const token = (auth || await readAuth()).token;
   const [planInfo, period] = await Promise.all([
     postBearer(PLAN_INFO_URL, token),
     postBearer(PERIOD_USAGE_URL, token),
@@ -343,31 +183,10 @@ async function loadEvents(cookie, teamId, startMs, endMs, signal) {
   return { events, truncated };
 }
 
-function dashboardFromEvents(snapshot, range, loaded, email, now) {
-  const own = selectOwnEvents(loaded.events, email);
-  const summary = aggregate(own);
-  const events = own
-    .slice()
-    .sort((left, right) => right.timestamp - left.timestamp)
-    .slice(0, TABLE_EVENT_LIMIT)
-    .map(({ email: _email, ...event }) => event);
-  return {
-    snapshot,
-    range,
-    days: summary.days,
-    models: summary.models,
-    events,
-    eventCount: own.length,
-    truncated: loaded.truncated,
-    loadingEvents: false,
-    updatedAt: now,
-  };
-}
-
-async function loadUsageDetails(range, snapshot) {
-  const { token, email } = await readAuth();
+async function loadUsageDetails(range, snapshot, auth) {
+  const sessionAuth = auth || await readAuth();
+  const { token, email } = sessionAuth;
   const session = sessionFromToken(token);
-  const aggregatedPromise = postBearer(AGGREGATED_URL, token).then(modelsFromAggregations).catch(() => []);
   let details = null;
   let eventsError = null;
   try {
@@ -383,35 +202,33 @@ async function loadUsageDetails(range, snapshot) {
     ));
     details = dashboardFromEvents(snapshot, range, loaded, email, now);
   } catch (error) {
-    eventsError = error instanceof Error ? error.message : "unknown";
+    eventsError = publicCode(error);
   }
-  const fallbackModels = details && details.models.length > 0 ? details.models : await aggregatedPromise;
+  const models = eventsError
+    ? await loadModelBreakdown(sessionAuth).catch(() => [])
+    : (details ? details.models : []);
+  const errorText = !eventsError
+    ? undefined
+    : (models.length
+      ? `События не загрузились (${eventsError}). Модели показаны за текущий цикл.`
+      : `События не загрузились (${eventsError}).`);
   return {
     snapshot,
     range,
     days: details ? details.days : [],
-    models: fallbackModels,
+    models,
     events: details ? details.events : [],
     eventCount: details ? details.eventCount : 0,
     truncated: details ? details.truncated : false,
     loadingEvents: false,
     updatedAt: Date.now(),
-    error: eventsError ? `События не загрузились (${eventsError}). Модели показаны за текущий цикл.` : undefined,
+    error: errorText,
   };
 }
 
 module.exports = {
-  aggregate,
-  formatDollars,
-  formatPercent,
-  formatReset,
   loadModelBreakdown,
   loadSnapshot,
   loadUsageDetails,
-  normalizeEvent,
-  rangeStart,
-  selectOwnEvents,
-  snapshotFrom,
-  statusText,
-  tooltipMarkdown,
+  ...require("./usage-model"),
 };
