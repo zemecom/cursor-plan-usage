@@ -73,17 +73,50 @@ function snapshotFrom(planInfoResponse, periodResponse) {
   };
 }
 
-function statusText(snapshot) {
-  const grok = `$(plan-grok) ${formatStatusPercent(snapshot.autoPercentUsed)}`;
-  const other = `$(symbol-misc) ${formatStatusPercent(snapshot.apiPercentUsed)}`;
-  const base = `${snapshot.planName} | ${grok} | ${other}`;
+function percentAlertLevel(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (value >= 100) {
+    return "error";
+  }
+  if (value >= 80) {
+    return "warning";
+  }
+  return null;
+}
+
+function statusSegments(snapshot) {
+  const segments = [
+    {
+      id: "grok",
+      text: `$(plan-grok) ${formatStatusPercent(snapshot.autoPercentUsed)}`,
+      level: percentAlertLevel(snapshot.autoPercentUsed),
+    },
+    {
+      id: "other",
+      text: `$(symbol-misc) ${formatStatusPercent(snapshot.apiPercentUsed)}`,
+      level: percentAlertLevel(snapshot.apiPercentUsed),
+    },
+  ];
   if (!snapshot.onDemand) {
-    return base;
+    return segments;
   }
   const demand = snapshot.onDemand.percent === null
     ? formatDollars(snapshot.onDemand.usedCents)
     : formatStatusPercent(snapshot.onDemand.percent);
-  return `${base} | $(credit-card) ${demand}`;
+  segments.push({
+    id: "od",
+    text: `$(credit-card) ${demand}`,
+    // OD appears only when spend > 0; always mark it red in the status bar.
+    level: "error",
+  });
+  return segments;
+}
+
+function statusText(snapshot) {
+  const body = statusSegments(snapshot).map((segment) => segment.text).join(" ");
+  return body ? `| ${body} |` : body;
 }
 
 function tooltipMarkdown(snapshot) {
@@ -258,7 +291,9 @@ module.exports = {
   publicCode,
   rangeStart,
   selectOwnEvents,
+  percentAlertLevel,
   snapshotFrom,
+  statusSegments,
   statusText,
   tooltipMarkdown,
 };

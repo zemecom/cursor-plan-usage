@@ -2,7 +2,7 @@
   "name": "cursor-plan-usage",
   "displayName": "Cursor Plan Usage",
   "description": "Статусбар и дашборд тарифа Cursor: Grok, Other и OD.",
-  "version": "0.2.24",
+  "version": "0.2.30",
   "publisher": "zemecom",
   "author": "zemecom",
   "repository": {

@@ -5,15 +5,20 @@ const vscode = require("vscode");
 const { dashboardHtml } = require("./dashboard");
 const { allowKeychainPrompt, readAuth } = require("./session");
 const { RANGES, defaultRange, openSettings, pollMs } = require("./settings");
-const { loadSnapshot, loadUsageDetails, publicCode, statusText, tooltipMarkdown } = require("./usage");
+const { loadSnapshot, loadUsageDetails, publicCode, statusSegments, tooltipMarkdown } = require("./usage");
 
 function activate(context) {
-  const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, Number.MIN_SAFE_INTEGER);
-  item.command = "cursorPlanUsage.openDashboard";
-  item.name = "Cursor Plan Usage";
-  item.text = "$(pulse) Cursor …";
-  item.tooltip = "Загрузка тарифа и процентов";
-  item.show();
+  const basePriority = Number.MIN_SAFE_INTEGER;
+  const items = {
+    // Only shown while loading or on refresh error; plan name stays in tooltip/dashboard.
+    status: createStatusItem(basePriority + 3),
+    grok: createStatusItem(basePriority + 2),
+    other: createStatusItem(basePriority + 1),
+    od: createStatusItem(basePriority),
+  };
+  items.status.text = "$(pulse) Cursor …";
+  items.status.tooltip = "Загрузка тарифа и процентов";
+  items.status.show();
 
   let panel = null;
   let panelSeenVisible = false;
@@ -23,17 +28,60 @@ function activate(context) {
   let refreshQueued = false;
   let refreshQueuedByUser = false;
 
-  function applySnapshot(snapshot) {
-    item.text = `$(pulse) ${statusText(snapshot)}`;
-    item.tooltip = tooltipMarkdown(snapshot);
+  function createStatusItem(priority) {
+    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, priority);
+    item.command = "cursorPlanUsage.openDashboard";
+    item.name = "Cursor Plan Usage";
+    return item;
+  }
+
+  function applyStatusColor(item, level) {
     item.backgroundColor = undefined;
-    const levels = [snapshot.autoPercentUsed, snapshot.apiPercentUsed, snapshot.onDemand && snapshot.onDemand.percent]
-      .filter((value) => value !== null && value !== undefined);
-    const peak = levels.length === 0 ? null : Math.max(...levels);
-    if (peak !== null && peak >= 100) {
-      item.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
-    } else if (peak !== null && peak >= 80) {
-      item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+    if (level === "error") {
+      item.color = new vscode.ThemeColor("charts.red");
+      return;
+    }
+    if (level === "warning") {
+      item.color = new vscode.ThemeColor("charts.orange");
+      return;
+    }
+    item.color = undefined;
+  }
+
+  function hideMeters() {
+    items.grok.hide();
+    items.other.hide();
+    items.od.hide();
+  }
+
+  function applySnapshot(snapshot) {
+    const tip = tooltipMarkdown(snapshot);
+    const byId = Object.create(null);
+    for (const segment of statusSegments(snapshot)) {
+      byId[segment.id] = segment;
+    }
+
+    const meterIds = byId.od ? ["grok", "other", "od"] : ["grok", "other"];
+    items.status.hide();
+
+    for (let index = 0; index < meterIds.length; index += 1) {
+      const id = meterIds[index];
+      const segment = byId[id];
+      let text = segment.text;
+      if (index === 0) {
+        text = `| ${text}`;
+      }
+      if (index === meterIds.length - 1) {
+        text = `${text} |`;
+      }
+      items[id].text = text;
+      items[id].tooltip = tip;
+      applyStatusColor(items[id], segment.level);
+      items[id].show();
+    }
+
+    if (!byId.od) {
+      items.od.hide();
     }
   }
 
@@ -44,9 +92,11 @@ function activate(context) {
   }
 
   function showRefreshError(code) {
-    item.text = "$(pulse) Cursor usage";
-    item.tooltip = `Не удалось прочитать тариф (${code}).`;
-    item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+    items.status.text = "$(pulse) Cursor usage";
+    items.status.tooltip = `Не удалось прочитать тариф (${code}).`;
+    applyStatusColor(items.status, "warning");
+    items.status.show();
+    hideMeters();
     if (panel && panel.visible) {
       postDashboard({
         error: `Не удалось загрузить дашборд (${code}).`,
@@ -172,7 +222,7 @@ function activate(context) {
   }
 
   restartTimer();
-  context.subscriptions.push(item, { dispose: () => clearInterval(timer) });
+  context.subscriptions.push(items.status, items.grok, items.other, items.od, { dispose: () => clearInterval(timer) });
   context.subscriptions.push(
     vscode.commands.registerCommand("cursorPlanUsage.openDashboard", openDashboard),
     vscode.commands.registerCommand("cursorPlanUsage.refresh", () => {

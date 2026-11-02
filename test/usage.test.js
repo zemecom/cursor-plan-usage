@@ -10,7 +10,9 @@ const {
   publicCode,
   rangeStart,
   selectOwnEvents,
+  percentAlertLevel,
   snapshotFrom,
+  statusSegments,
   statusText,
 } = require("../usage-model");
 
@@ -62,8 +64,9 @@ test("status text hides a zero OD meter and the mixed percent", () => {
       spendLimitUsage: {},
     }
   );
-  assert.equal(statusText(snapshot), "Team | $(plan-grok) 10.0 | $(symbol-misc) 0.0");
+  assert.equal(statusText(snapshot), "| $(plan-grok) 10.0 $(symbol-misc) 0.0 |");
   assert.equal(statusText(snapshot).includes("99"), false);
+  assert.equal(statusText(snapshot).includes("Team"), false);
 });
 
 test("status text appends the OD percent", () => {
@@ -74,13 +77,33 @@ test("status text appends the OD percent", () => {
       spendLimitUsage: { individualUsed: 1429, individualLimit: 10000 },
     }
   );
-  assert.equal(statusText(snapshot), "Team | $(plan-grok) 100.0 | $(symbol-misc) 26.1 | $(credit-card) 14.3");
+  assert.equal(statusText(snapshot), "| $(plan-grok) 100.0 $(symbol-misc) 26.1 $(credit-card) 14.3 |");
   assert.equal(statusText({
     planName: "Team",
     autoPercentUsed: 30.6,
     apiPercentUsed: 0.4,
     onDemand: null,
-  }), "Team | $(plan-grok) 30.6 | $(symbol-misc) 0.4");
+  }), "| $(plan-grok) 30.6 $(symbol-misc) 0.4 |");
+});
+
+test("each status meter gets its own alert level", () => {
+  assert.equal(percentAlertLevel(79.9), null);
+  assert.equal(percentAlertLevel(80), "warning");
+  assert.equal(percentAlertLevel(99.6), "warning");
+  assert.equal(percentAlertLevel(100), "error");
+  assert.equal(percentAlertLevel(null), null);
+
+  const segments = statusSegments({
+    planName: "Team",
+    autoPercentUsed: 42.8,
+    apiPercentUsed: 100,
+    onDemand: { usedCents: 1243, limitCents: 0, percent: null },
+  });
+  assert.deepEqual(segments.map((segment) => [segment.id, segment.level]), [
+    ["grok", null],
+    ["other", "error"],
+    ["od", "error"],
+  ]);
 });
 
 test("events with emails keep only the signed-in account", () => {
