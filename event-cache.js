@@ -126,6 +126,7 @@ function readEventCache(file) {
   return {
     events: Array.isArray(parsed.events) ? parsed.events : [],
     covered: Array.isArray(parsed.covered) ? parsed.covered : [],
+    savedAt: Number.isFinite(parsed.savedAt) ? parsed.savedAt : null,
   };
 }
 
@@ -137,6 +138,7 @@ function writeEventCache(file, cache) {
   fs.writeFileSync(file, JSON.stringify({
     events: cache.events || [],
     covered: cache.covered || [],
+    savedAt: Number.isFinite(cache.savedAt) ? cache.savedAt : null,
   }));
 }
 

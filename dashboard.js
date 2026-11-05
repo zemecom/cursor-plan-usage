@@ -49,6 +49,7 @@ function dashboardHtml(webview, nonce) {
     td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     .banner { display: none; margin-bottom: 12px; padding: 8px 10px; border-radius: 6px; background: var(--vscode-inputValidation-errorBackground); }
     .banner.show { display: block; }
+    .banner.warning { background: var(--vscode-inputValidation-warningBackground); color: var(--vscode-inputValidation-warningForeground, inherit); }
     .progress { height: 6px; margin: -8px 0 12px; border-radius: 999px; background: var(--vscode-scrollbarSlider-background, rgba(127,127,127,.35)); overflow: hidden; }
     .progress[hidden] { display: none; }
     .progress .fill { height: 100%; width: 0; background: var(--vscode-progressBar-background, var(--vscode-button-background)); transition: width 180ms ease; }
@@ -211,6 +212,7 @@ function dashboardHtml(webview, nonce) {
         eventCount: payload.eventCount || 0,
         truncated: Boolean(payload.truncated),
         timedOut: Boolean(payload.timedOut),
+        stale: Boolean(payload.stale),
         updatedAt: payload.updatedAt || null,
       };
     }
@@ -282,7 +284,9 @@ function dashboardHtml(webview, nonce) {
       const hold = Boolean(shown) && (payload.retain || (payload.loadingEvents && !incoming));
       const frame = hold ? shown : frameFrom(payload);
       const snapshot = payload.snapshot || (hold && shown.snapshot) || {};
+      const markStale = Boolean(payload.stale) || Boolean(!hold && frame.stale);
       banner.classList.toggle("show", Boolean(payload.error));
+      banner.classList.toggle("warning", Boolean(payload.stale || payload.timedOut));
       banner.textContent = payload.error || "";
       renderProgress(payload);
       const price = snapshot.price ? " (" + snapshot.price + ")" : "";
@@ -329,14 +333,18 @@ function dashboardHtml(webview, nonce) {
       }
       eventNote.textContent = payload.loadingEvents
         ? ""
+        : markStale
+        ? "Новых событий нет из-за таймаута."
         : frame.timedOut
-        ? "Показана только часть периода: загрузка оборвалась по времени."
+        ? "Хвост периода не догрузился из-за таймаута."
         : frame.truncated
         ? "Показана только часть периода: событий слишком много."
         : (frame.eventCount ? "Всего " + frame.eventCount : "");
       const stamp = payload.loadingEvents ? null : (hold ? shown.updatedAt : payload.updatedAt);
       updated.textContent = payload.loadingEvents
         ? (payload.progressLabel || "Тариф на месте, события ещё считаются…")
+        : markStale
+        ? (stamp ? "События устарели, снимок от " + when(stamp) : "События устарели")
         : stamp ? "Обновлено " + when(stamp) : "Нет данных";
       if (!payload.retain && (!payload.loadingEvents || incoming)) {
         shown = frameFrom(payload);

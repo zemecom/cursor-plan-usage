@@ -13,6 +13,7 @@ const {
 const {
   dashboardFromEvents,
   eventLoadProgress,
+  eventTimeoutNotice,
   normalizeEvent,
   partialEventLoad,
   publicCode,
@@ -26,7 +27,8 @@ const STRIPE_URL = "https://cursor.com/api/auth/stripe";
 const EVENTS_URL = "https://cursor.com/api/dashboard/get-filtered-usage-events";
 const EVENTS_PAGE_SIZE = 200;
 const EVENTS_MAX_PAGES = 8;
-const EVENTS_DEADLINE_MS = 60000;
+const EVENTS_DEADLINE_MS = 180000;
+const EVENTS_REQUEST_TIMEOUT_MS = 30000;
 
 function sessionFromToken(token) {
   const part = token.split(".")[1];
@@ -185,7 +187,7 @@ async function loadEvents(cookie, teamId, startMs, endMs, signal, onPage) {
       data = await requestJson(EVENTS_URL, {
         method: "POST",
         headers: cookieHeaders(cookie),
-        timeout: 15000,
+        timeout: EVENTS_REQUEST_TIMEOUT_MS,
         signal,
         body: {
           teamId: teamId || 0,
@@ -215,18 +217,23 @@ async function loadEvents(cookie, teamId, startMs, endMs, signal, onPage) {
 }
 
 async function loadCachedEvents(cookie, teamId, rangeStartMs, rangeEndMs, signal, onPage, cacheFile) {
-  const prepared = prepareEventCache(readEventCache(cacheFile), rangeStartMs, rangeEndMs);
+  const cached = readEventCache(cacheFile);
+  const prepared = prepareEventCache(cached, rangeStartMs, rangeEndMs);
+  let savedAt = Number.isFinite(cached.savedAt) ? cached.savedAt : null;
   if (prepared.gaps.length === 0) {
     return {
       events: eventsInRange(prepared.events, rangeStartMs, rangeEndMs),
       truncated: false,
       timedOut: false,
+      stale: false,
+      savedAt,
     };
   }
   let events = prepared.events;
   let covered = prepared.covered;
   let timedOut = false;
   let truncated = false;
+  let gotNew = false;
   const publish = (pageEvents, page, finished) => {
     reportEventPage(onPage, page, eventsInRange(mergeEvents(events, pageEvents), rangeStartMs, rangeEndMs), finished);
   };
@@ -243,6 +250,9 @@ async function loadCachedEvents(cookie, teamId, rangeStartMs, rangeEndMs, signal
       timedOut = true;
       break;
     }
+    if (loaded.events.length > 0) {
+      gotNew = true;
+    }
     events = mergeEvents(events, loaded.events);
     if (loaded.timedOut) {
       timedOut = true;
@@ -255,13 +265,19 @@ async function loadCachedEvents(cookie, teamId, rangeStartMs, rangeEndMs, signal
       break;
     }
   }
-  const kept = prepareEventCache({ events, covered }, rangeStartMs, rangeEndMs);
-  writeEventCache(cacheFile, { events: kept.events, covered: kept.covered });
-  const ranged = eventsInRange(kept.events, rangeStartMs, rangeEndMs);
-  if (timedOut && ranged.length === 0) {
-    throw new Error("timeout");
+  if (!timedOut && !truncated) {
+    savedAt = Date.now();
   }
-  return { events: ranged, truncated, timedOut };
+  const kept = prepareEventCache({ events, covered }, rangeStartMs, rangeEndMs);
+  writeEventCache(cacheFile, { events: kept.events, covered: kept.covered, savedAt });
+  const ranged = eventsInRange(kept.events, rangeStartMs, rangeEndMs);
+  return {
+    events: ranged,
+    truncated,
+    timedOut,
+    stale: timedOut && !gotNew,
+    savedAt,
+  };
 }
 
 async function loadUsageDetails(range, snapshot, auth, onProgress, cacheFile) {
@@ -270,6 +286,7 @@ async function loadUsageDetails(range, snapshot, auth, onProgress, cacheFile) {
   const session = sessionFromToken(token);
   let details = null;
   let eventsError = null;
+  let eventsStarted = false;
   try {
     const stripe = await runWithin(8000, (signal) => requestJson(STRIPE_URL, {
       method: "GET",
@@ -279,6 +296,7 @@ async function loadUsageDetails(range, snapshot, auth, onProgress, cacheFile) {
     }));
     const now = Date.now();
     const startMs = rangeStart(range, snapshot, now);
+    eventsStarted = true;
     const loaded = await runWithin(EVENTS_DEADLINE_MS, (signal) => (
       loadCachedEvents(session.cookie, stripe && stripe.teamId, startMs, now, signal, (pageState) => {
         if (typeof onProgress !== "function") {
@@ -301,6 +319,17 @@ async function loadUsageDetails(range, snapshot, auth, onProgress, cacheFile) {
   } catch (error) {
     eventsError = publicCode(error);
   }
+  if (eventsError === "timeout" && eventsStarted) {
+    return {
+      snapshot,
+      range,
+      retain: true,
+      stale: true,
+      timedOut: true,
+      loadingEvents: false,
+      error: eventTimeoutNotice(true),
+    };
+  }
   if (eventsError) {
     return {
       snapshot,
@@ -309,6 +338,17 @@ async function loadUsageDetails(range, snapshot, auth, onProgress, cacheFile) {
       loadingEvents: false,
       updatedAt: Date.now(),
       error: `События не загрузились (${eventsError}).`,
+    };
+  }
+  if (details.timedOut && details.eventCount === 0) {
+    return {
+      snapshot,
+      range,
+      retain: true,
+      stale: true,
+      timedOut: true,
+      loadingEvents: false,
+      error: eventTimeoutNotice(true),
     };
   }
   return {
@@ -320,11 +360,10 @@ async function loadUsageDetails(range, snapshot, auth, onProgress, cacheFile) {
     eventCount: details.eventCount,
     truncated: details.truncated,
     timedOut: details.timedOut,
+    stale: details.stale,
     loadingEvents: false,
     updatedAt: details.updatedAt,
-    error: details.timedOut
-      ? "Список оборвался по времени. Показаны уже загруженные события."
-      : undefined,
+    error: details.timedOut ? eventTimeoutNotice(details.stale) : undefined,
   };
 }
 

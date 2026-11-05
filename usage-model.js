@@ -19,6 +19,13 @@ function partialEventLoad(errorCode, events) {
   return null;
 }
 
+function eventTimeoutNotice(stale) {
+  if (stale) {
+    return "События устарели. Новых нет: загрузка оборвалась по таймауту.";
+  }
+  return "Загрузка оборвалась по таймауту. Новые события показаны только частично.";
+}
+
 function eventLoadProgress(completedPages, finished) {
   if (finished) {
     return 1;
@@ -290,8 +297,9 @@ function dashboardFromEvents(snapshot, range, loaded, email, now) {
     eventCount: own.length,
     truncated: Boolean(loaded.truncated),
     timedOut: Boolean(loaded.timedOut),
+    stale: Boolean(loaded.stale),
     loadingEvents: false,
-    updatedAt: now,
+    updatedAt: loaded.stale ? (Number.isFinite(loaded.savedAt) ? loaded.savedAt : null) : now,
   };
 }
 
@@ -299,6 +307,7 @@ module.exports = {
   aggregate,
   dashboardFromEvents,
   eventLoadProgress,
+  eventTimeoutNotice,
   fillDays,
   formatDollars,
   formatPercent,

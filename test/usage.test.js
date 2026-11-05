@@ -8,6 +8,7 @@ const {
   fillDays,
   onDemandFrom,
   eventLoadProgress,
+  eventTimeoutNotice,
   publicCode,
   partialEventLoad,
   rangeStart,
@@ -237,6 +238,29 @@ test("event cache refetches only the gaps", () => {
   }, 10, 40);
   assert.deepEqual(prepared.gaps, [{ startMs: 20, endMs: 40 }]);
   assert.equal(prepared.events.length, 1);
+});
+test("timed-out rows keep the saved time and say nothing new arrived", () => {
+  const now = noon(2026, 10, 26);
+  const savedAt = now - 60 * 60 * 1000;
+  const view = dashboardFromEvents({}, "30d", {
+    events: [{
+      timestamp: savedAt,
+      model: "grok",
+      totalTokens: 1,
+      requests: 1,
+      spendCents: 0,
+      email: null,
+    }],
+    truncated: true,
+    timedOut: true,
+    stale: true,
+    savedAt,
+  }, null, now);
+  assert.equal(view.stale, true);
+  assert.equal(view.eventCount, 1);
+  assert.equal(view.updatedAt, savedAt);
+  assert.equal(eventTimeoutNotice(true), "События устарели. Новых нет: загрузка оборвалась по таймауту.");
+  assert.match(eventTimeoutNotice(false), /частично/);
 });
 test("publicCode keeps short codes and hides response text", () => {
   assert.equal(publicCode(new Error("http-401")), "http-401");
