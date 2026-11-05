@@ -1,5 +1,6 @@
 "use strict";
 
+const path = require("path");
 const crypto = require("crypto");
 const vscode = require("vscode");
 const { dashboardHtml } = require("./dashboard");
@@ -27,6 +28,8 @@ function activate(context) {
   let refreshing = false;
   let refreshQueued = false;
   let refreshQueuedByUser = false;
+  let dashboardEpoch = 0;
+  const cacheFile = path.join(context.globalStorageUri.fsPath, "events-cache.json");
 
   function createStatusItem(priority) {
     const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, priority);
@@ -101,11 +104,7 @@ function activate(context) {
       postDashboard({
         error: `Не удалось загрузить дашборд (${code}).`,
         range,
-        snapshot: null,
-        days: [],
-        models: [],
-        events: [],
-        eventCount: 0,
+        retain: true,
         loadingEvents: false,
         updatedAt: Date.now(),
       });
@@ -113,17 +112,26 @@ function activate(context) {
   }
 
   async function pushDashboard(auth, snapshot) {
+    const epoch = ++dashboardEpoch;
+    const requestedRange = range;
     postDashboard({
       snapshot,
-      range,
-      days: [],
-      models: [],
-      events: [],
-      eventCount: 0,
+      range: requestedRange,
+      epoch,
       loadingEvents: true,
+      progressLabel: "Загрузка событий…",
       updatedAt: Date.now(),
     });
-    postDashboard(await loadUsageDetails(range, snapshot, auth));
+    const details = await loadUsageDetails(requestedRange, snapshot, auth, (partial) => {
+      if (epoch !== dashboardEpoch || requestedRange !== range) {
+        return;
+      }
+      postDashboard({ ...partial, epoch, range: requestedRange });
+    }, cacheFile);
+    if (epoch !== dashboardEpoch || requestedRange !== range) {
+      return;
+    }
+    postDashboard({ ...details, epoch });
   }
 
   async function refresh(options = {}) {
@@ -187,8 +195,13 @@ function activate(context) {
       if (!message || typeof message.type !== "string") {
         return;
       }
+      if (message.type === "ready" || message.type === "refresh" || message.type === "range") {
+        if (RANGES.has(message.range)) {
+          range = message.range;
+        }
+      }
       if (message.type === "ready") {
-        void refresh({ userInitiated: true });
+        void refresh({ userInitiated: true, mustRun: true });
         return;
       }
       if (message.type === "refresh") {
@@ -200,7 +213,6 @@ function activate(context) {
         return;
       }
       if (message.type === "range" && RANGES.has(message.range)) {
-        range = message.range;
         void refresh({ userInitiated: true, mustRun: true });
       }
     });
@@ -218,7 +230,6 @@ function activate(context) {
     });
     panel.webview.html = dashboardHtml(panel.webview, nonce);
     context.subscriptions.push(panel);
-    void refresh({ userInitiated: true });
   }
 
   restartTimer();

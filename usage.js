@@ -3,9 +3,18 @@
 const https = require("https");
 const { readAuth } = require("./session");
 const {
+  eventsInRange,
+  prepareEventCache,
+  addCoverage,
+  mergeEvents,
+  readEventCache,
+  writeEventCache,
+} = require("./event-cache");
+const {
   dashboardFromEvents,
-  modelsFromAggregations,
+  eventLoadProgress,
   normalizeEvent,
+  partialEventLoad,
   publicCode,
   rangeStart,
   snapshotFrom,
@@ -13,11 +22,11 @@ const {
 
 const PLAN_INFO_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo";
 const PERIOD_USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
-const AGGREGATED_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetAggregatedUsageEvents";
 const STRIPE_URL = "https://cursor.com/api/auth/stripe";
 const EVENTS_URL = "https://cursor.com/api/dashboard/get-filtered-usage-events";
 const EVENTS_PAGE_SIZE = 200;
 const EVENTS_MAX_PAGES = 8;
+const EVENTS_DEADLINE_MS = 60000;
 
 function sessionFromToken(token) {
   const part = token.split(".")[1];
@@ -136,11 +145,6 @@ function runWithin(ms, start) {
     .finally(() => clearTimeout(timer));
 }
 
-async function loadModelBreakdown(auth) {
-  const token = (auth || await readAuth()).token;
-  return modelsFromAggregations(await postBearer(AGGREGATED_URL, token));
-}
-
 async function loadSnapshot(auth) {
   const token = (auth || await readAuth()).token;
   const [planInfo, period] = await Promise.all([
@@ -150,40 +154,117 @@ async function loadSnapshot(auth) {
   return snapshotFrom(planInfo, period);
 }
 
-async function loadEvents(cookie, teamId, startMs, endMs, signal) {
-  if (signal && signal.aborted) {
-    throw new Error("timeout");
+function keepPartialEvents(error, events) {
+  return partialEventLoad(publicCode(error), events);
+}
+
+function reportEventPage(onPage, page, events, finished) {
+  if (typeof onPage !== "function" || finished) {
+    return;
   }
+  onPage({
+    page,
+    events,
+    progress: eventLoadProgress(page, false),
+  });
+}
+
+async function loadEvents(cookie, teamId, startMs, endMs, signal, onPage) {
   const events = [];
   let truncated = false;
   for (let page = 1; page <= EVENTS_MAX_PAGES; page += 1) {
     if (signal && signal.aborted) {
+      const partial = partialEventLoad("timeout", events);
+      if (partial) {
+        return partial;
+      }
       throw new Error("timeout");
     }
-    const data = await requestJson(EVENTS_URL, {
-      method: "POST",
-      headers: cookieHeaders(cookie),
-      timeout: 15000,
-      signal,
-      body: {
-        teamId: teamId || 0,
-        startDate: String(startMs),
-        endDate: String(endMs),
-        page,
-        pageSize: EVENTS_PAGE_SIZE,
-      },
-    });
+    let data;
+    try {
+      data = await requestJson(EVENTS_URL, {
+        method: "POST",
+        headers: cookieHeaders(cookie),
+        timeout: 15000,
+        signal,
+        body: {
+          teamId: teamId || 0,
+          startDate: String(startMs),
+          endDate: String(endMs),
+          page,
+          pageSize: EVENTS_PAGE_SIZE,
+        },
+      });
+    } catch (error) {
+      const partial = keepPartialEvents(error, events);
+      if (partial) {
+        return partial;
+      }
+      throw error;
+    }
     const list = Array.isArray(data.usageEventsDisplay) ? data.usageEventsDisplay : [];
     events.push(...list.map(normalizeEvent));
-    if (list.length < EVENTS_PAGE_SIZE) {
-      return { events, truncated: false };
+    const pageFull = list.length >= EVENTS_PAGE_SIZE;
+    reportEventPage(onPage, page, events.slice(), !pageFull || page === EVENTS_MAX_PAGES);
+    if (!pageFull) {
+      return { events, truncated: false, timedOut: false };
     }
     truncated = page === EVENTS_MAX_PAGES;
   }
-  return { events, truncated };
+  return { events, truncated, timedOut: false };
 }
 
-async function loadUsageDetails(range, snapshot, auth) {
+async function loadCachedEvents(cookie, teamId, rangeStartMs, rangeEndMs, signal, onPage, cacheFile) {
+  const prepared = prepareEventCache(readEventCache(cacheFile), rangeStartMs, rangeEndMs);
+  if (prepared.gaps.length === 0) {
+    return {
+      events: eventsInRange(prepared.events, rangeStartMs, rangeEndMs),
+      truncated: false,
+      timedOut: false,
+    };
+  }
+  let events = prepared.events;
+  let covered = prepared.covered;
+  let timedOut = false;
+  let truncated = false;
+  const publish = (pageEvents, page, finished) => {
+    reportEventPage(onPage, page, eventsInRange(mergeEvents(events, pageEvents), rangeStartMs, rangeEndMs), finished);
+  };
+  for (const gap of prepared.gaps) {
+    let loaded;
+    try {
+      loaded = await loadEvents(cookie, teamId, gap.startMs, gap.endMs, signal, (pageState) => {
+        publish(pageState.events, pageState.page, false);
+      });
+    } catch (error) {
+      if (publicCode(error) !== "timeout") {
+        throw error;
+      }
+      timedOut = true;
+      break;
+    }
+    events = mergeEvents(events, loaded.events);
+    if (loaded.timedOut) {
+      timedOut = true;
+    } else if (loaded.truncated) {
+      truncated = true;
+    } else {
+      covered = addCoverage(covered, gap.startMs, gap.endMs);
+    }
+    if (loaded.timedOut) {
+      break;
+    }
+  }
+  const kept = prepareEventCache({ events, covered }, rangeStartMs, rangeEndMs);
+  writeEventCache(cacheFile, { events: kept.events, covered: kept.covered });
+  const ranged = eventsInRange(kept.events, rangeStartMs, rangeEndMs);
+  if (timedOut && ranged.length === 0) {
+    throw new Error("timeout");
+  }
+  return { events: ranged, truncated, timedOut };
+}
+
+async function loadUsageDetails(range, snapshot, auth, onProgress, cacheFile) {
   const sessionAuth = auth || await readAuth();
   const { token, email } = sessionAuth;
   const session = sessionFromToken(token);
@@ -197,37 +278,57 @@ async function loadUsageDetails(range, snapshot, auth) {
       signal,
     }));
     const now = Date.now();
-    const loaded = await runWithin(8000, (signal) => (
-      loadEvents(session.cookie, stripe && stripe.teamId, rangeStart(range, snapshot, now), now, signal)
+    const startMs = rangeStart(range, snapshot, now);
+    const loaded = await runWithin(EVENTS_DEADLINE_MS, (signal) => (
+      loadCachedEvents(session.cookie, stripe && stripe.teamId, startMs, now, signal, (pageState) => {
+        if (typeof onProgress !== "function") {
+          return;
+        }
+        const partial = dashboardFromEvents(snapshot, range, {
+          events: pageState.events,
+          truncated: true,
+          timedOut: false,
+        }, email, now);
+        onProgress({
+          ...partial,
+          loadingEvents: true,
+          progress: pageState.progress,
+          progressLabel: `${pageState.events.length} событий`,
+        });
+      }, cacheFile)
     ));
     details = dashboardFromEvents(snapshot, range, loaded, email, now);
   } catch (error) {
     eventsError = publicCode(error);
   }
-  const models = eventsError
-    ? await loadModelBreakdown(sessionAuth).catch(() => [])
-    : (details ? details.models : []);
-  const errorText = !eventsError
-    ? undefined
-    : (models.length
-      ? `События не загрузились (${eventsError}). Модели показаны за текущий цикл.`
-      : `События не загрузились (${eventsError}).`);
+  if (eventsError) {
+    return {
+      snapshot,
+      range,
+      retain: true,
+      loadingEvents: false,
+      updatedAt: Date.now(),
+      error: `События не загрузились (${eventsError}).`,
+    };
+  }
   return {
     snapshot,
-    range,
-    days: details ? details.days : [],
-    models,
-    events: details ? details.events : [],
-    eventCount: details ? details.eventCount : 0,
-    truncated: details ? details.truncated : false,
+    range: details.range,
+    days: details.days,
+    models: details.models,
+    events: details.events,
+    eventCount: details.eventCount,
+    truncated: details.truncated,
+    timedOut: details.timedOut,
     loadingEvents: false,
-    updatedAt: Date.now(),
-    error: errorText,
+    updatedAt: details.updatedAt,
+    error: details.timedOut
+      ? "Список оборвался по времени. Показаны уже загруженные события."
+      : undefined,
   };
 }
 
 module.exports = {
-  loadModelBreakdown,
   loadSnapshot,
   loadUsageDetails,
   ...require("./usage-model"),

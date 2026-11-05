@@ -27,8 +27,8 @@ function pollMs() {
 }
 
 function defaultRange() {
-  const range = vscode.workspace.getConfiguration("cursorPlanUsage").get("dashboardDefaultRange", "billingCycle");
-  return RANGES.has(range) ? range : "billingCycle";
+  const range = vscode.workspace.getConfiguration("cursorPlanUsage").get("dashboardDefaultRange", "30d");
+  return RANGES.has(range) ? range : "30d";
 }
 
 async function pickPollInterval() {

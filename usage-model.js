@@ -12,6 +12,23 @@ function publicCode(error) {
   return /^[a-z][a-z0-9-]{0,31}$/.test(raw) ? raw : "unknown";
 }
 
+function partialEventLoad(errorCode, events) {
+  if (errorCode === "timeout" && Array.isArray(events) && events.length > 0) {
+    return { events, truncated: true, timedOut: true };
+  }
+  return null;
+}
+
+function eventLoadProgress(completedPages, finished) {
+  if (finished) {
+    return 1;
+  }
+  if (!Number.isInteger(completedPages) || completedPages < 1) {
+    return null;
+  }
+  return completedPages / (completedPages + 1);
+}
+
 function formatPercent(value) {
   return value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
 }
@@ -260,7 +277,6 @@ function dashboardFromEvents(snapshot, range, loaded, email, now) {
   const events = own
     .slice()
     .sort((left, right) => right.timestamp - left.timestamp)
-    .slice(0, 200)
     .map(({ email: _email, ...event }) => event);
   const days = loaded.truncated
     ? summary.days
@@ -272,7 +288,8 @@ function dashboardFromEvents(snapshot, range, loaded, email, now) {
     models: summary.models,
     events,
     eventCount: own.length,
-    truncated: loaded.truncated,
+    truncated: Boolean(loaded.truncated),
+    timedOut: Boolean(loaded.timedOut),
     loadingEvents: false,
     updatedAt: now,
   };
@@ -281,6 +298,7 @@ function dashboardFromEvents(snapshot, range, loaded, email, now) {
 module.exports = {
   aggregate,
   dashboardFromEvents,
+  eventLoadProgress,
   fillDays,
   formatDollars,
   formatPercent,
@@ -288,6 +306,7 @@ module.exports = {
   modelsFromAggregations,
   normalizeEvent,
   onDemandFrom,
+  partialEventLoad,
   publicCode,
   rangeStart,
   selectOwnEvents,

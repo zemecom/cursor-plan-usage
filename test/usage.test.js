@@ -7,7 +7,9 @@ const {
   dashboardFromEvents,
   fillDays,
   onDemandFrom,
+  eventLoadProgress,
   publicCode,
+  partialEventLoad,
   rangeStart,
   selectOwnEvents,
   percentAlertLevel,
@@ -15,6 +17,7 @@ const {
   statusSegments,
   statusText,
 } = require("../usage-model");
+const { addCoverage, mergeEvents, missingWindows, prepareEventCache } = require("../event-cache");
 
 function noon(year, month, day) {
   return new Date(year, month - 1, day, 12).getTime();
@@ -168,9 +171,73 @@ test("a full event page fills empty days, a truncated page stays sparse", () => 
   const partial = dashboardFromEvents(snapshot, "billingCycle", { events: [event], truncated: true }, null, now);
   assert.equal(partial.days.length, 1);
   assert.equal(partial.truncated, true);
+  assert.equal(partial.timedOut, false);
   assert.equal(Object.hasOwn(partial.events[0], "email"), false);
+  const timedOut = dashboardFromEvents(snapshot, "30d", { events: [event], truncated: true, timedOut: true }, null, now);
+  assert.equal(timedOut.timedOut, true);
+  assert.equal(timedOut.range, "30d");
 });
 
+test("dashboard keeps every event so the table can page", () => {
+  const now = noon(2026, 10, 26);
+  const events = Array.from({ length: 201 }, (_, index) => ({
+    timestamp: now - index * 1000,
+    model: "grok",
+    totalTokens: 1,
+    requests: 1,
+    spendCents: 0,
+    email: null,
+  }));
+  const view = dashboardFromEvents({}, "30d", { events, truncated: true }, null, now);
+  assert.equal(view.eventCount, 201);
+  assert.equal(view.events.length, 201);
+  assert.equal(view.events[0].timestamp, now);
+});
+test("event progress moves with each full page and completes at the end", () => {
+  assert.equal(eventLoadProgress(0, false), null);
+  assert.equal(eventLoadProgress(1, false), 1 / 2);
+  assert.equal(eventLoadProgress(2, false), 2 / 3);
+  assert.equal(eventLoadProgress(3, true), 1);
+});
+
+test("timeout keeps pages already loaded and drops an empty attempt", () => {
+  assert.equal(partialEventLoad("timeout", []), null);
+  assert.equal(partialEventLoad("http-500", [{ timestamp: 1 }]), null);
+  assert.deepEqual(partialEventLoad("timeout", [{ timestamp: 1 }]), {
+    events: [{ timestamp: 1 }],
+    truncated: true,
+    timedOut: true,
+  });
+});
+
+test("event cache refetches only the gaps", () => {
+  const event = (timestamp) => ({
+    timestamp,
+    model: "grok",
+    kind: "Включено",
+    totalTokens: 1,
+    requests: 1,
+    spendCents: 0,
+    maxMode: false,
+    email: null,
+  });
+  assert.deepEqual(missingWindows([], 10, 40), [{ startMs: 10, endMs: 40 }]);
+  assert.deepEqual(missingWindows([{ startMs: 10, endMs: 40 }], 10, 40), []);
+  assert.deepEqual(missingWindows([{ startMs: 10, endMs: 20 }], 10, 40), [{ startMs: 20, endMs: 40 }]);
+  assert.deepEqual(missingWindows([{ startMs: 20, endMs: 30 }], 10, 40), [
+    { startMs: 10, endMs: 20 },
+    { startMs: 30, endMs: 40 },
+  ]);
+  assert.deepEqual(addCoverage([{ startMs: 10, endMs: 20 }], 20, 30), [{ startMs: 10, endMs: 30 }]);
+  const merged = mergeEvents([event(2), event(2)], [event(1)]);
+  assert.deepEqual(merged.map((item) => item.timestamp), [1, 2]);
+  const prepared = prepareEventCache({
+    events: [event(15)],
+    covered: [{ startMs: 10, endMs: 20 }],
+  }, 10, 40);
+  assert.deepEqual(prepared.gaps, [{ startMs: 20, endMs: 40 }]);
+  assert.equal(prepared.events.length, 1);
+});
 test("publicCode keeps short codes and hides response text", () => {
   assert.equal(publicCode(new Error("http-401")), "http-401");
   assert.equal(publicCode(new Error("keychain")), "keychain");

@@ -2,7 +2,7 @@
   "name": "cursor-plan-usage",
   "displayName": "Cursor Plan Usage",
   "description": "Статусбар и дашборд тарифа Cursor: Grok, Other и OD.",
-  "version": "0.2.30",
+  "version": "0.2.35",
   "publisher": "zemecom",
   "author": "zemecom",
   "repository": {
@@ -52,7 +52,7 @@
         },
         "cursorPlanUsage.dashboardDefaultRange": {
           "type": "string",
-          "default": "billingCycle",
+          "default": "30d",
           "enum": ["billingCycle", "30d", "7d", "1d"],
           "enumDescriptions": [
             "Текущий биллинг-цикл",
