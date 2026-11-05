@@ -2,7 +2,7 @@
   "name": "cursor-plan-usage",
   "displayName": "Cursor Plan Usage",
   "description": "Статусбар и дашборд тарифа Cursor: Grok, Other и OD.",
-  "version": "0.2.36",
+  "version": "0.2.49",
   "publisher": "zemecom",
   "author": "zemecom",
   "repository": {
@@ -55,12 +55,12 @@
           "default": "30d",
           "enum": ["billingCycle", "30d", "7d", "1d"],
           "enumDescriptions": [
-            "Текущий биллинг-цикл",
+            "Тариф",
             "Последние 30 дней",
             "Последние 7 дней",
             "Последние 24 часа"
           ],
-          "description": "Период, который дашборд открывает по умолчанию. Проценты тарифа в карточках всегда за текущий цикл."
+          "description": "Период, который дашборд открывает по умолчанию. Проценты в карточках всегда за период тарифа."
         }
       }
     }

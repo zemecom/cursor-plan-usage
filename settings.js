@@ -5,7 +5,7 @@ const { publicCode } = require("./usage-model");
 
 const RANGES = new Set(["billingCycle", "30d", "7d", "1d"]);
 const RANGE_LABELS = [
-  ["billingCycle", "Текущий цикл"],
+  ["billingCycle", "Тариф"],
   ["30d", "30 дней"],
   ["7d", "7 дней"],
   ["1d", "24 часа"],

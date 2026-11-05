@@ -1,6 +1,9 @@
 "use strict";
 
+const { missingWindows } = require("./event-cache");
+
 const MAX_FILL_DAYS = 62;
+const STATUS_WARNING_COLOR = "#c4622a";
 
 function asNumber(value) {
   const number = typeof value === "number" ? value : Number(value);
@@ -153,7 +156,7 @@ function tooltipMarkdown(snapshot) {
       `OD: ${formatDollars(snapshot.onDemand.usedCents)} из ${formatDollars(snapshot.onDemand.limitCents)} (${formatPercent(snapshot.onDemand.percent)})`,
     ] : []),
     `Потрачено: ${formatDollars(snapshot.totalSpendCents)} (включено ${formatDollars(snapshot.includedSpendCents)}, бонус ${formatDollars(snapshot.bonusSpendCents)}, лимит ${formatDollars(snapshot.limitCents)})`,
-    `Цикл до: ${formatReset(snapshot.billingCycleEndMs)}`,
+    `Тариф до: ${formatReset(snapshot.billingCycleEndMs)}`,
     "",
     "Клик открывает дашборд.",
   ].join("\n");
@@ -257,6 +260,29 @@ function fillDays(days, startMs, endMs) {
   return filled;
 }
 
+function localDayBounds(day) {
+  const [year, month, date] = String(day).split("-").map(Number);
+  const start = new Date(year, month - 1, date).getTime();
+  const end = new Date(year, month - 1, date + 1).getTime() - 1;
+  return { start, end };
+}
+
+function daysForChart(summaryDays, covered, rangeStartMs, rangeEndMs) {
+  const known = new Map(summaryDays.map((day) => [day.day, day]));
+  if (missingWindows(covered, rangeStartMs, rangeEndMs).length === 0) {
+    return fillDays(summaryDays, rangeStartMs, rangeEndMs);
+  }
+  return fillDays(summaryDays, rangeStartMs, rangeEndMs).filter((day) => {
+    if (known.has(day.day)) {
+      return true;
+    }
+    const bounds = localDayBounds(day.day);
+    const from = Math.max(bounds.start, rangeStartMs);
+    const to = Math.min(bounds.end, rangeEndMs);
+    return to > from && missingWindows(covered, from, to).length === 0;
+  });
+}
+
 function rangeStart(range, snapshot, now) {
   if (range === "1d") return now - 86400000;
   if (range === "7d") return now - 7 * 86400000;
@@ -285,9 +311,12 @@ function dashboardFromEvents(snapshot, range, loaded, email, now) {
     .slice()
     .sort((left, right) => right.timestamp - left.timestamp)
     .map(({ email: _email, ...event }) => event);
-  const days = loaded.truncated
-    ? summary.days
-    : fillDays(summary.days, rangeStart(range, snapshot, now), now);
+  const windowStart = rangeStart(range, snapshot, now);
+  const days = Array.isArray(loaded.covered)
+    ? daysForChart(summary.days, loaded.covered, windowStart, now)
+    : (loaded.truncated
+      ? summary.days
+      : fillDays(summary.days, windowStart, now));
   return {
     snapshot,
     range,
@@ -298,6 +327,8 @@ function dashboardFromEvents(snapshot, range, loaded, email, now) {
     truncated: Boolean(loaded.truncated),
     timedOut: Boolean(loaded.timedOut),
     stale: Boolean(loaded.stale),
+    backfilling: Boolean(loaded.backfilling),
+    stalled: Boolean(loaded.stalled),
     loadingEvents: false,
     updatedAt: loaded.stale ? (Number.isFinite(loaded.savedAt) ? loaded.savedAt : null) : now,
   };
@@ -321,6 +352,7 @@ module.exports = {
   selectOwnEvents,
   percentAlertLevel,
   snapshotFrom,
+  STATUS_WARNING_COLOR,
   statusSegments,
   statusText,
   tooltipMarkdown,

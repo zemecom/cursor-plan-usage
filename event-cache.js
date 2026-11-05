@@ -80,6 +80,53 @@ function missingWindows(covered, rangeStart, rangeEnd) {
   return gaps;
 }
 
+function newestFirstOldest(pages) {
+  if (!Array.isArray(pages) || pages.length === 0) {
+    return null;
+  }
+  let previousOldest = Infinity;
+  for (const page of pages) {
+    if (!Array.isArray(page) || page.length === 0) {
+      return null;
+    }
+    for (let index = 1; index < page.length; index += 1) {
+      if (!(page[index].timestamp <= page[index - 1].timestamp)) {
+        return null;
+      }
+    }
+    const newest = page[0].timestamp;
+    const oldest = page[page.length - 1].timestamp;
+    if (!Number.isFinite(newest) || !Number.isFinite(oldest) || newest > previousOldest) {
+      return null;
+    }
+    previousOldest = oldest;
+  }
+  return previousOldest;
+}
+
+function nextEventSlice(pages, gapStart, gapEnd) {
+  if (!(gapEnd > gapStart)) {
+    return { action: "stall" };
+  }
+  const oldest = newestFirstOldest(pages);
+  if (oldest == null) {
+    const mid = gapStart + Math.floor((gapEnd - gapStart) / 2);
+    if (mid <= gapStart || mid >= gapEnd) {
+      return { action: "stall" };
+    }
+    return {
+      action: "split",
+      left: { startMs: gapStart, endMs: mid },
+      right: { startMs: mid, endMs: gapEnd },
+    };
+  }
+  const coverStart = oldest + 1;
+  if (!(coverStart > gapStart && coverStart < gapEnd)) {
+    return { action: "stall" };
+  }
+  return { action: "boundary", coverStart, coverEnd: gapEnd };
+}
+
 function pruneEventCache(cache, now) {
   const cutoff = now - CACHE_KEEP_MS;
   const events = mergeEvents([], (cache && cache.events) || []).filter((event) => event.timestamp >= cutoff);
@@ -148,6 +195,7 @@ module.exports = {
   eventsInRange,
   mergeEvents,
   missingWindows,
+  nextEventSlice,
   prepareEventCache,
   pruneEventCache,
   readEventCache,

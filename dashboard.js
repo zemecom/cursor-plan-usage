@@ -1,5 +1,7 @@
 "use strict";
 
+const { STATUS_WARNING_COLOR } = require("./usage-model");
+
 function dashboardHtml(webview, nonce) {
   const csp = [
     "default-src 'none'",
@@ -15,7 +17,9 @@ function dashboardHtml(webview, nonce) {
   <title>Cursor Plan Usage</title>
   <style>
     :root { color-scheme: light dark; }
-    body { margin: 0; padding: 20px 24px 40px; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+    html, body { height: 100%; overflow: hidden; }
+    body { box-sizing: border-box; display: flex; flex-direction: column; height: 100vh; margin: 0; padding: 16px 24px 12px; overflow: hidden; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+    body > header, body > .progress, body > .banner, body > .cards { flex-shrink: 0; }
     header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
     h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
     h2 { font-size: 14px; margin: 0; }
@@ -28,25 +32,48 @@ function dashboardHtml(webview, nonce) {
     button:disabled { cursor: progress; }
     button.busy::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: refresh-spin 0.7s linear infinite; }
     @keyframes refresh-spin { to { transform: rotate(360deg); } }
-    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 12px 0 20px; }
-    .card { background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-widget-border, transparent); border-radius: 8px; padding: 12px; }
-    .card .label { display: flex; align-items: center; min-height: 16px; font-size: 12px; color: var(--vscode-descriptionForeground); }
+    .cards { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+    .card { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: 1 1 auto; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-widget-border, transparent); border-radius: 8px; padding: 6px 12px; }
+    .card .label { display: flex; align-items: center; min-height: 0; font-size: 12px; color: var(--vscode-descriptionForeground); }
     .mark { width: 16px; height: 16px; display: block; fill: currentColor; }
-    .card .value { font-size: 22px; margin-top: 4px; }
-    .card .value.warning { color: var(--vscode-charts-orange); }
+    .card .value { font-size: 16.5px; font-weight: 700; margin-top: 0; white-space: nowrap; }
+    .card .value.plan { color: var(--vscode-charts-blue, #4f8cff); }
+    .card .value.warning { color: ${STATUS_WARNING_COLOR}; }
     .card .value.error { color: var(--vscode-charts-red); }
     section { margin-top: 22px; }
-    .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 12px; }
-    .range { display: flex; gap: 6px; }
+    .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 12px; flex-wrap: wrap; }
+    .range { display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px; min-width: 0; }
+    .range button { width: auto; }
     .range button.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-    .bars { display: flex; align-items: flex-end; gap: 6px; min-height: 140px; overflow-x: auto; padding-top: 8px; }
-    .bar { flex: 1 0 28px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; min-width: 28px; }
-    .bar .fill { width: 100%; background: var(--vscode-charts-blue, #4f8cff); border-radius: 3px 3px 0 0; min-height: 2px; }
-    .bar span { font-size: 10px; color: var(--vscode-descriptionForeground); }
+    .workspace { display: flex; flex-direction: column; align-items: stretch; gap: 12px; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+    .period { box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; max-width: 100%; flex-shrink: 0; min-width: 0; padding: 8px 10px; border: 1px solid var(--vscode-widget-border, rgba(127,127,127,.35)); border-radius: 8px; background: var(--vscode-editorWidget-background); }
+    .period-filters { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
+    .period-label { margin: 0; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--vscode-descriptionForeground); }
+    .view-pick { position: relative; display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 0 0 auto; }
+    .view-pick select { box-sizing: border-box; max-width: 100%; appearance: none; -webkit-appearance: none; background: var(--vscode-dropdown-background, var(--vscode-input-background)); color: var(--vscode-dropdown-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, transparent)); border-radius: 4px; padding: 4px 26px 4px 8px; font: inherit; }
+    .view-pick::after { content: ""; position: absolute; right: 10px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid var(--vscode-foreground); border-bottom: 1.5px solid var(--vscode-foreground); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+    .workspace-main { min-width: 0; width: 100%; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .tab-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding-top: 12px; overflow: hidden; }
+    .tab-panel[hidden] { display: none; }
+    .tab-panel > section { margin-top: 0; }
+    .split { display: flex; align-items: stretch; gap: 20px; margin-top: 0; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+    .split-chart { flex: 3 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .split-models { flex: 7 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .split section { margin-top: 0; }
+    .section-head { flex-shrink: 0; }
+    .bars { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+    .bar { display: grid; grid-template-columns: 46px minmax(0, 1fr); align-items: center; gap: 8px; width: 100%; flex: 1 1 0; min-height: 0; max-height: 16px; overflow: hidden; }
+    .bar .track { height: 100%; max-height: 14px; min-height: 2px; min-width: 0; }
+    .table-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+    .table-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--vscode-editor-background); }
+    .events-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .bar .fill { height: 100%; width: 0; background: var(--vscode-charts-blue, #4f8cff); border-radius: 3px; min-width: 2px; }
+    .bar span { font-size: 10px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .table-scroll table { border-collapse: separate; border-spacing: 0; }
     th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--vscode-widget-border, rgba(127,127,127,.25)); }
     th { color: var(--vscode-descriptionForeground); font-weight: 500; }
-    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .banner { display: none; margin-bottom: 12px; padding: 8px 10px; border-radius: 6px; background: var(--vscode-inputValidation-errorBackground); }
     .banner.show { display: block; }
     .banner.warning { background: var(--vscode-inputValidation-warningBackground); color: var(--vscode-inputValidation-warningForeground, inherit); }
@@ -55,10 +82,13 @@ function dashboardHtml(webview, nonce) {
     .progress .fill { height: 100%; width: 0; background: var(--vscode-progressBar-background, var(--vscode-button-background)); transition: width 180ms ease; }
     .progress .fill.indeterminate { width: 35%; animation: progress-slide 1.1s ease-in-out infinite; }
     @keyframes progress-slide { from { transform: translateX(-120%); } to { transform: translateX(320%); } }
-    .pager { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .pager { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-shrink: 0; }
     .pager[hidden] { display: none; }
     .pager button:disabled { opacity: 0.45; cursor: default; }
-    @media (max-width: 800px) { .cards { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 800px) {
+      .split { flex-direction: column; }
+      .split-chart, .split-models { flex: 1 1 0; width: 100%; min-height: 0; }
+    }
   </style>
 </head>
 <body>
@@ -75,46 +105,76 @@ function dashboardHtml(webview, nonce) {
   <div id="progress" class="progress" hidden><div id="progress-fill" class="fill"></div></div>
   <div id="banner" class="banner"></div>
   <div id="cards" class="cards"></div>
-  <section>
-    <div class="section-head">
-      <h2>По дням</h2>
-      <div class="range" id="range">
-        <button type="button" data-range="billingCycle">Цикл</button>
-        <button type="button" data-range="30d" class="active">30 дней</button>
-        <button type="button" data-range="7d">7 дней</button>
-        <button type="button" data-range="1d">24 часа</button>
+  <div class="workspace">
+    <aside class="period">
+      <div class="period-filters">
+        <div class="period-label">Период</div>
+        <div class="range" id="range">
+          <button type="button" data-range="billingCycle">Тариф</button>
+          <button type="button" data-range="30d" class="active">30 дней</button>
+          <button type="button" data-range="7d">7 дней</button>
+          <button type="button" data-range="1d">24 часа</button>
+        </div>
+      </div>
+      <label class="view-pick">
+        <span class="period-label">Вид</span>
+        <select id="view-select">
+          <option value="summary">Сводка</option>
+          <option value="events">События</option>
+        </select>
+      </label>
+    </aside>
+    <div class="workspace-main">
+      <div id="panel-summary" class="tab-panel" role="tabpanel">
+        <div class="split">
+          <section class="split-chart">
+            <div class="section-head">
+              <div>
+                <h2>По дням</h2>
+                <div id="day-note" class="muted"></div>
+              </div>
+            </div>
+            <div id="bars" class="bars"></div>
+          </section>
+          <section class="split-models">
+            <div class="section-head"><h2>По моделям</h2></div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Модель</th><th class="num">Токены</th><th class="num">Запросы</th><th class="num">$</th></tr></thead>
+                <tbody id="models"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </div>
+      <div id="panel-events" class="tab-panel" role="tabpanel" hidden>
+        <section class="events-panel">
+          <div class="section-head"><h2>События</h2><span id="event-note" class="muted"></span></div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Время</th><th>Тип</th><th>Модель</th><th class="num">Токены</th><th class="num">Запросы</th><th class="num">$</th></tr></thead>
+              <tbody id="events"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="event-pager" hidden>
+            <button type="button" id="event-first">В начало</button>
+            <button type="button" id="event-back">−3</button>
+            <button type="button" id="event-prev">Назад</button>
+            <span id="event-page-label" class="muted"></span>
+            <button type="button" id="event-next">Дальше</button>
+            <button type="button" id="event-forward">+3</button>
+            <button type="button" id="event-last">В конец</button>
+          </div>
+        </section>
       </div>
     </div>
-    <div id="bars" class="bars"></div>
-  </section>
-  <section>
-    <div class="section-head"><h2>По моделям</h2></div>
-    <table>
-      <thead><tr><th>Модель</th><th class="num">Токены</th><th class="num">Запросы</th><th class="num">$</th></tr></thead>
-      <tbody id="models"></tbody>
-    </table>
-  </section>
-  <section>
-    <div class="section-head"><h2>События</h2><span id="event-note" class="muted"></span></div>
-    <table>
-      <thead><tr><th>Время</th><th>Тип</th><th>Модель</th><th class="num">Токены</th><th class="num">Запросы</th><th class="num">$</th></tr></thead>
-      <tbody id="events"></tbody>
-    </table>
-    <div class="pager" id="event-pager" hidden>
-      <button type="button" id="event-first">В начало</button>
-      <button type="button" id="event-back">−3</button>
-      <button type="button" id="event-prev">Назад</button>
-      <span id="event-page-label" class="muted"></span>
-      <button type="button" id="event-next">Дальше</button>
-      <button type="button" id="event-forward">+3</button>
-      <button type="button" id="event-last">В конец</button>
-    </div>
-  </section>
+  </div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const saved = vscode.getState() || {};
     let selectedRange = saved.range || "30d";
     let rangePinned = Boolean(saved.range);
+    let selectedTab = saved.tab === "events" ? "events" : "summary";
     let seenEpoch = 0;
     const cards = document.getElementById("cards");
     const bars = document.getElementById("bars");
@@ -213,6 +273,8 @@ function dashboardHtml(webview, nonce) {
         truncated: Boolean(payload.truncated),
         timedOut: Boolean(payload.timedOut),
         stale: Boolean(payload.stale),
+        backfilling: Boolean(payload.backfilling),
+        stalled: Boolean(payload.stalled),
         updatedAt: payload.updatedAt || null,
       };
     }
@@ -277,7 +339,7 @@ function dashboardHtml(webview, nonce) {
       if (payload.range) {
         selectedRange = payload.range;
         rangePinned = true;
-        vscode.setState({ range: selectedRange });
+        vscode.setState({ range: selectedRange, tab: selectedTab });
         highlightRange(selectedRange);
       }
       const incoming = Array.isArray(payload.days);
@@ -286,12 +348,12 @@ function dashboardHtml(webview, nonce) {
       const snapshot = payload.snapshot || (hold && shown.snapshot) || {};
       const markStale = Boolean(payload.stale) || Boolean(!hold && frame.stale);
       banner.classList.toggle("show", Boolean(payload.error));
-      banner.classList.toggle("warning", Boolean(payload.stale || payload.timedOut));
+      banner.classList.toggle("warning", Boolean(payload.stale || payload.timedOut || payload.stalled));
       banner.textContent = payload.error || "";
       renderProgress(payload);
       const price = snapshot.price ? " (" + snapshot.price + ")" : "";
       const summary = [
-        card("Тариф", (snapshot.planName || "—") + price),
+        card("Тариф", (snapshot.planName || "—") + price, "plan"),
         card(grokMark(), percent(snapshot.autoPercentUsed), limitLevel(snapshot.autoPercentUsed)),
         card("Other", percent(snapshot.apiPercentUsed), limitLevel(snapshot.apiPercentUsed)),
       ];
@@ -302,17 +364,21 @@ function dashboardHtml(webview, nonce) {
         summary.push(card("OD", demand, "error"));
       }
       cards.replaceChildren(...summary);
-      const dayRows = frame.days;
+      const dayRows = frame.days.slice().reverse();
       const waiting = Boolean(payload.loadingEvents) && !incoming && !shown;
       const maxTokens = dayRows.reduce((max, day) => Math.max(max, day.tokens), 0) || 1;
       bars.replaceChildren(...(waiting
         ? [el("span", "Загрузка…", "muted")]
         : dayRows.length ? dayRows.map((day) => {
         const column = el("div", null, "bar");
+        const track = el("div", null, "track");
         const fill = el("div", null, "fill");
-        fill.style.height = Math.max(2, Math.round((day.tokens / maxTokens) * 120)) + "px";
+        const share = day.tokens / maxTokens;
+        fill.style.width = (share * 100) + "%";
+        fill.style.opacity = String(0.3 + 0.7 * share);
         fill.title = day.day + ": " + tokens(day.tokens) + " токенов, " + dollars(day.spendCents);
-        column.append(fill, el("span", String(day.day || "").slice(5)));
+        track.append(fill);
+        column.append(el("span", String(day.day || "").slice(5)), track);
         return column;
       }) : [el("span", "За выбранный период событий нет", "muted")]));
       const modelRows = frame.models;
@@ -331,12 +397,19 @@ function dashboardHtml(webview, nonce) {
         eventList = eventRows;
         renderEventPage();
       }
+      document.getElementById("day-note").textContent = (payload.backfilling || frame.backfilling)
+        ? "Старые дни ещё догружаются"
+        : "";
       eventNote.textContent = payload.loadingEvents
         ? ""
         : markStale
         ? "Новых событий нет из-за таймаута."
         : frame.timedOut
         ? "Хвост периода не догрузился из-за таймаута."
+        : frame.stalled
+        ? "Дальше этот кусок не режется: в нём больше 1600 событий."
+        : frame.backfilling
+        ? "Старые дни ещё догружаются."
         : frame.truncated
         ? "Показана только часть периода: событий слишком много."
         : (frame.eventCount ? "Всего " + frame.eventCount : "");
@@ -373,12 +446,20 @@ function dashboardHtml(webview, nonce) {
       }
       selectedRange = next;
       rangePinned = true;
-      vscode.setState({ range: next });
+      vscode.setState({ range: next, tab: selectedTab });
       highlightRange(next);
       setRefreshing(true);
       beginProgress();
       vscode.postMessage({ type: "range", range: next });
     });
+    function showTab(name) {
+      selectedTab = name === "events" ? "events" : "summary";
+      vscode.setState({ range: selectedRange, tab: selectedTab });
+      document.getElementById("view-select").value = selectedTab;
+      document.getElementById("panel-summary").hidden = selectedTab !== "summary";
+      document.getElementById("panel-events").hidden = selectedTab !== "events";
+    }
+    document.getElementById("view-select").addEventListener("change", (event) => showTab(event.target.value));
     function moveEventPage(nextPage) {
       eventPage = nextPage;
       renderEventPage();
@@ -399,6 +480,7 @@ function dashboardHtml(webview, nonce) {
       }
     });
     highlightRange(selectedRange);
+    showTab(selectedTab);
     vscode.postMessage({ type: "ready", range: selectedRange });
   </script>
 </body>

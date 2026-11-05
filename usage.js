@@ -7,6 +7,8 @@ const {
   prepareEventCache,
   addCoverage,
   mergeEvents,
+  missingWindows,
+  nextEventSlice,
   readEventCache,
   writeEventCache,
 } = require("./event-cache");
@@ -173,12 +175,11 @@ function reportEventPage(onPage, page, events, finished) {
 
 async function loadEvents(cookie, teamId, startMs, endMs, signal, onPage) {
   const events = [];
-  let truncated = false;
+  const pages = [];
   for (let page = 1; page <= EVENTS_MAX_PAGES; page += 1) {
     if (signal && signal.aborted) {
-      const partial = partialEventLoad("timeout", events);
-      if (partial) {
-        return partial;
+      if (pages.length > 0) {
+        return { events, pages, truncated: true, timedOut: true };
       }
       throw new Error("timeout");
     }
@@ -198,22 +199,28 @@ async function loadEvents(cookie, teamId, startMs, endMs, signal, onPage) {
         },
       });
     } catch (error) {
+      if (publicCode(error) === "timeout" && pages.length > 0) {
+        return { events, pages, truncated: true, timedOut: true };
+      }
       const partial = keepPartialEvents(error, events);
       if (partial) {
-        return partial;
+        return { ...partial, pages };
       }
       throw error;
     }
-    const list = Array.isArray(data.usageEventsDisplay) ? data.usageEventsDisplay : [];
-    events.push(...list.map(normalizeEvent));
-    const pageFull = list.length >= EVENTS_PAGE_SIZE;
+    const pageEvents = (Array.isArray(data.usageEventsDisplay) ? data.usageEventsDisplay : []).map(normalizeEvent);
+    events.push(...pageEvents);
+    const pageFull = pageEvents.length >= EVENTS_PAGE_SIZE;
     reportEventPage(onPage, page, events.slice(), !pageFull || page === EVENTS_MAX_PAGES);
     if (!pageFull) {
-      return { events, truncated: false, timedOut: false };
+      return { events, pages, truncated: false, timedOut: false };
     }
-    truncated = page === EVENTS_MAX_PAGES;
+    pages.push(pageEvents);
+    if (page === EVENTS_MAX_PAGES) {
+      return { events, pages, truncated: true, timedOut: false };
+    }
   }
-  return { events, truncated, timedOut: false };
+  return { events, pages, truncated: true, timedOut: false };
 }
 
 async function loadCachedEvents(cookie, teamId, rangeStartMs, rangeEndMs, signal, onPage, cacheFile) {
@@ -223,25 +230,53 @@ async function loadCachedEvents(cookie, teamId, rangeStartMs, rangeEndMs, signal
   if (prepared.gaps.length === 0) {
     return {
       events: eventsInRange(prepared.events, rangeStartMs, rangeEndMs),
+      covered: prepared.covered,
       truncated: false,
       timedOut: false,
       stale: false,
+      backfilling: false,
+      stalled: false,
       savedAt,
     };
   }
   let events = prepared.events;
   let covered = prepared.covered;
   let timedOut = false;
-  let truncated = false;
   let gotNew = false;
-  const publish = (pageEvents, page, finished) => {
-    reportEventPage(onPage, page, eventsInRange(mergeEvents(events, pageEvents), rangeStartMs, rangeEndMs), finished);
+  let stalled = false;
+  let pagesDone = 0;
+  const pending = prepared.gaps.slice().reverse();
+  const persist = () => {
+    const kept = prepareEventCache({ events, covered }, rangeStartMs, rangeEndMs);
+    writeEventCache(cacheFile, { events: kept.events, covered: kept.covered, savedAt });
+    events = kept.events;
+    covered = kept.covered;
   };
-  for (const gap of prepared.gaps) {
+  const publish = (pageEvents, countPage) => {
+    if (countPage) {
+      pagesDone += 1;
+    }
+    if (typeof onPage !== "function") {
+      return;
+    }
+    onPage({
+      page: pagesDone,
+      events: eventsInRange(mergeEvents(events, pageEvents || []), rangeStartMs, rangeEndMs),
+      progress: eventLoadProgress(pagesDone, false),
+      covered,
+      backfilling: missingWindows(covered, rangeStartMs, rangeEndMs).length > 0,
+    });
+  };
+  while (pending.length > 0) {
+    if (signal && signal.aborted) {
+      timedOut = true;
+      break;
+    }
+    const gap = pending.pop();
     let loaded;
     try {
       loaded = await loadEvents(cookie, teamId, gap.startMs, gap.endMs, signal, (pageState) => {
-        publish(pageState.events, pageState.page, false);
+        publish(pageState.events, true);
       });
     } catch (error) {
       if (publicCode(error) !== "timeout") {
@@ -254,28 +289,48 @@ async function loadCachedEvents(cookie, teamId, rangeStartMs, rangeEndMs, signal
       gotNew = true;
     }
     events = mergeEvents(events, loaded.events);
+    if (!loaded.truncated && !loaded.timedOut) {
+      covered = addCoverage(covered, gap.startMs, gap.endMs);
+    } else if (Array.isArray(loaded.pages) && loaded.pages.length > 0) {
+      const slice = nextEventSlice(loaded.pages, gap.startMs, gap.endMs);
+      if (slice.action === "boundary") {
+        covered = addCoverage(covered, slice.coverStart, slice.coverEnd);
+        pending.push({ startMs: gap.startMs, endMs: slice.coverStart });
+      } else if (slice.action === "split" && !loaded.timedOut) {
+        pending.push(slice.left);
+        pending.push(slice.right);
+      } else {
+        stalled = true;
+      }
+    } else if (loaded.truncated) {
+      const slice = nextEventSlice([], gap.startMs, gap.endMs);
+      if (slice.action === "split" && !loaded.timedOut) {
+        pending.push(slice.left);
+        pending.push(slice.right);
+      } else {
+        stalled = true;
+      }
+    }
+    persist();
+    publish([], false);
     if (loaded.timedOut) {
       timedOut = true;
-    } else if (loaded.truncated) {
-      truncated = true;
-    } else {
-      covered = addCoverage(covered, gap.startMs, gap.endMs);
-    }
-    if (loaded.timedOut) {
       break;
     }
   }
-  if (!timedOut && !truncated) {
+  const backfilling = missingWindows(covered, rangeStartMs, rangeEndMs).length > 0;
+  if (!timedOut && !backfilling) {
     savedAt = Date.now();
+    persist();
   }
-  const kept = prepareEventCache({ events, covered }, rangeStartMs, rangeEndMs);
-  writeEventCache(cacheFile, { events: kept.events, covered: kept.covered, savedAt });
-  const ranged = eventsInRange(kept.events, rangeStartMs, rangeEndMs);
   return {
-    events: ranged,
-    truncated,
+    events: eventsInRange(events, rangeStartMs, rangeEndMs),
+    covered,
+    truncated: backfilling,
     timedOut,
     stale: timedOut && !gotNew,
+    backfilling,
+    stalled,
     savedAt,
   };
 }
@@ -304,7 +359,9 @@ async function loadUsageDetails(range, snapshot, auth, onProgress, cacheFile) {
         }
         const partial = dashboardFromEvents(snapshot, range, {
           events: pageState.events,
-          truncated: true,
+          covered: pageState.covered,
+          backfilling: pageState.backfilling,
+          truncated: !Array.isArray(pageState.covered),
           timedOut: false,
         }, email, now);
         onProgress({
@@ -361,9 +418,13 @@ async function loadUsageDetails(range, snapshot, auth, onProgress, cacheFile) {
     truncated: details.truncated,
     timedOut: details.timedOut,
     stale: details.stale,
+    backfilling: details.backfilling,
+    stalled: details.stalled,
     loadingEvents: false,
     updatedAt: details.updatedAt,
-    error: details.timedOut ? eventTimeoutNotice(details.stale) : undefined,
+    error: details.timedOut
+      ? eventTimeoutNotice(details.stale)
+      : (details.stalled ? "Дальше этот кусок не режется: в нём больше 1600 событий." : undefined),
   };
 }
 

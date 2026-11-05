@@ -6,7 +6,7 @@ const vscode = require("vscode");
 const { dashboardHtml } = require("./dashboard");
 const { allowKeychainPrompt, readAuth } = require("./session");
 const { RANGES, defaultRange, openSettings, pollMs } = require("./settings");
-const { loadSnapshot, loadUsageDetails, publicCode, statusSegments, tooltipMarkdown } = require("./usage");
+const { loadSnapshot, loadUsageDetails, publicCode, STATUS_WARNING_COLOR, statusSegments, tooltipMarkdown } = require("./usage");
 
 function activate(context) {
   const basePriority = Number.MIN_SAFE_INTEGER;
@@ -45,7 +45,7 @@ function activate(context) {
       return;
     }
     if (level === "warning") {
-      item.color = new vscode.ThemeColor("charts.orange");
+      item.color = STATUS_WARNING_COLOR;
       return;
     }
     item.color = undefined;

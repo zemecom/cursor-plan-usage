@@ -18,7 +18,7 @@ const {
   statusSegments,
   statusText,
 } = require("../usage-model");
-const { addCoverage, mergeEvents, missingWindows, prepareEventCache } = require("../event-cache");
+const { addCoverage, mergeEvents, missingWindows, nextEventSlice, prepareEventCache } = require("../event-cache");
 
 function noon(year, month, day) {
   return new Date(year, month - 1, day, 12).getTime();
@@ -262,6 +262,38 @@ test("timed-out rows keep the saved time and say nothing new arrived", () => {
   assert.equal(eventTimeoutNotice(true), "События устарели. Новых нет: загрузка оборвалась по таймауту.");
   assert.match(eventTimeoutNotice(false), /частично/);
 });
+test("ordered pages close only the newer side of a full slice", () => {
+  const pages = [[5, 4], [4, 3]].map((page) => page.map((timestamp) => ({ timestamp })));
+  assert.deepEqual(nextEventSlice(pages, 0, 10), { action: "boundary", coverStart: 4, coverEnd: 10 });
+  const unordered = [[5, 1], [4, 3]].map((page) => page.map((timestamp) => ({ timestamp })));
+  const split = nextEventSlice(unordered, 0, 10);
+  assert.equal(split.action, "split");
+  assert.deepEqual(split.left, { startMs: 0, endMs: 5 });
+  assert.deepEqual(split.right, { startMs: 5, endMs: 10 });
+  assert.equal(nextEventSlice([[{ timestamp: 9 }]], 0, 10).action, "stall");
+});
+
+test("chart keeps zero days only inside closed coverage", () => {
+  const end = new Date(2026, 10, 5, 23, 59, 59, 999).getTime();
+  const view = dashboardFromEvents({}, "30d", {
+    events: [{
+      timestamp: noon(2026, 11, 4),
+      model: "grok",
+      totalTokens: 8,
+      requests: 1,
+      spendCents: 0,
+      email: null,
+    }],
+    covered: [{ startMs: new Date(2026, 10, 3).getTime(), endMs: end }],
+    backfilling: true,
+  }, null, end);
+  assert.deepEqual(view.days.map((day) => day.day), ["2026-11-03", "2026-11-04", "2026-11-05"]);
+  assert.equal(view.days[0].tokens, 0);
+  assert.equal(view.days[1].tokens, 8);
+  assert.equal(view.days[2].tokens, 0);
+  assert.equal(view.backfilling, true);
+});
+
 test("publicCode keeps short codes and hides response text", () => {
   assert.equal(publicCode(new Error("http-401")), "http-401");
   assert.equal(publicCode(new Error("keychain")), "keychain");
